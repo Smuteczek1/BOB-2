@@ -534,6 +534,14 @@ module.exports = {
     return { oldLevel, newLevel, xp: row.xp };
   },
 
+  // Wszyscy użytkownicy z XP na serwerze (do eksportu / kopii zapasowej)
+  async getAllUserLevels(guildId) {
+    return await queryMany(
+      'SELECT user_id, xp, level FROM user_levels WHERE guild_id = $1 ORDER BY xp DESC',
+      [guildId],
+    );
+  },
+
   async getLeaderboardXp(guildId, limit = 10) {
     return await queryMany(`
       SELECT * FROM user_levels WHERE guild_id = $1 ORDER BY xp DESC LIMIT $2
