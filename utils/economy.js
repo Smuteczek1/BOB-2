@@ -9,12 +9,6 @@ const CURRENCY = {
   forms: ['moneta', 'monety', 'monet'],
 };
 
-// Zarobki z aktywności (można nadpisać w .env)
-const COIN_CHAT_MIN = Number(process.env.COIN_CHAT_MIN ?? 5);
-const COIN_CHAT_MAX = Number(process.env.COIN_CHAT_MAX ?? 10);
-const COIN_VOICE_MIN = Number(process.env.COIN_VOICE_MIN ?? 2);
-const COIN_VOICE_MAX = Number(process.env.COIN_VOICE_MAX ?? 5);
-
 // Skrzynie dziennej nagrody. chance = szansa w promilach (suma musi dać 1000).
 const DAILY_TIERS = [
   { name: '⚪ Pospolita Skrzynia', color: 0x95a5a6, chance: 350, min: 50, max: 100 },
@@ -73,10 +67,6 @@ function reasonLabel(reason) {
 
 module.exports = {
   CURRENCY,
-  COIN_CHAT_MIN,
-  COIN_CHAT_MAX,
-  COIN_VOICE_MIN,
-  COIN_VOICE_MAX,
   DAILY_TIERS,
   pluralPl,
   formatCoins,

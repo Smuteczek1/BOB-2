@@ -1,12 +1,6 @@
 const { EmbedBuilder } = require('discord.js');
 const db = require('../db');
 const { syncLevelRole } = require('./levelRoles');
-const {
-  COIN_CHAT_MIN,
-  COIN_CHAT_MAX,
-  COIN_VOICE_MIN,
-  COIN_VOICE_MAX,
-} = require('./economy');
 
 // --- Konfiguracja czasów ---
 const CHAT_COOLDOWN_MIN = Number(process.env.XP_CHAT_COOLDOWN_MIN ?? 1);
@@ -80,19 +74,6 @@ async function grantTextXp(client, message) {
   const amount = randomInt(10, 20);
   const { oldLevel, newLevel } = await db.addXp(message.guild.id, message.author.id, amount, 'text', levelForXp);
 
-  // Monety za czat: ten sam cooldown co XP (sprawdzony wyżej), więc spam nic nie daje.
-  // Błąd ekonomii nie może zepsuć naliczania XP, dlatego osobny try/catch.
-  try {
-    await db.addActivityCoins(
-      message.guild.id,
-      message.author.id,
-      randomInt(COIN_CHAT_MIN, COIN_CHAT_MAX),
-      'chat',
-    );
-  } catch (err) {
-    console.error('Błąd naliczania monet za czat:', err);
-  }
-
   if (newLevel > oldLevel) {
     await syncLevelRole(client, message.guild.id, message.author.id, newLevel);
   }
@@ -123,14 +104,6 @@ async function tickVoiceXp(client) {
         const finalAmount = Math.max(1, Math.floor(baseAmount * multiplier));
 
         const { oldLevel, newLevel } = await db.addXp(guild.id, member.id, finalAmount, 'voice', levelForXp);
-
-        // Monety za głosowy: ten sam mnożnik liczby osób co XP
-        try {
-          const coinAmount = Math.max(1, Math.floor(randomInt(COIN_VOICE_MIN, COIN_VOICE_MAX) * multiplier));
-          await db.addActivityCoins(guild.id, member.id, coinAmount, 'voice');
-        } catch (err) {
-          console.error('Błąd naliczania monet za głosowy:', err);
-        }
 
         if (newLevel > oldLevel) {
           await syncLevelRole(client, guild.id, member.id, newLevel);

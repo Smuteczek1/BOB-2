@@ -90,7 +90,7 @@ npm start
 | `/rola-panel lista` | Pokazuje wszystkie panele ról na serwerze (z ID) | Zarządzanie rolami |
 | `/setup-poziomy [kategoria] [nazwa_kanalu]` | Tworzy kanał ogłaszający kamienie milowe poziomów | Zarządzanie serwerem |
 | `/poziom [uzytkownik]` | Pokazuje Twój (lub czyjś) aktualny poziom i XP | Wszyscy |
-| `/portfel [uzytkownik]` | Pokazuje saldo monet, zarobki z czatu/głosu i (dla Ciebie) ostatnie operacje | Wszyscy |
+| `/portfel [uzytkownik]` | Pokazuje saldo monet, zarobione łącznie i (dla Ciebie) ostatnie operacje | Wszyscy |
 | `/nagroda` | Dzienna skrzynia z monetami (reset o północy, czas polski) | Wszyscy |
 | `/cclear kanal ilosc:<liczba/all> [uzytkownik]` | Usuwa wiadomości z bieżącego kanału | Zarządzanie wiadomościami |
 | `/cclear uzytkownik uzytkownik:<user> okres:<...>` | Usuwa wiadomości danego użytkownika ze WSZYSTKICH kanałów, z ostatnich X godzin | Zarządzanie wiadomościami |
@@ -164,20 +164,16 @@ mimo że nie każdy poziom jest ogłaszany publicznie.
 Każdy użytkownik ma na serwerze **portfel z monetami**. Nazwę i emoji waluty zmieniasz w jednym
 miejscu: `utils/economy.js` (obiekt `CURRENCY`).
 
-**Skąd się biorą monety:**
-- **Czat:** razem z XP, z tym samym cooldownem (domyślnie 5-10 monet; `COIN_CHAT_MIN` / `COIN_CHAT_MAX` w `.env`)
-- **Głosowy:** co minutę, z tym samym mnożnikiem liczby osób co XP (domyślnie 2-5 monet; `COIN_VOICE_MIN` / `COIN_VOICE_MAX`)
-- **`/nagroda`:** dzienna skrzynia (7 rzadkości, szanse i zakresy w `DAILY_TIERS` w `utils/economy.js`)
+**Skąd się biorą monety:** na razie tylko z `/nagroda` (dzienna skrzynia, 7 rzadkości; szanse i zakresy
+w `DAILY_TIERS` w `utils/economy.js`). Kolejne źródła (kasyno, projekty) dojdą w następnych etapach.
+**XP** nadal pochodzi wyłącznie z czatu i głosowego i nie ma z monetami nic wspólnego.
 
 **Bezpieczeństwo salda:** wszystkie zmiany idą przez funkcje w `db.js` (`addCoins`, `spendCoins`,
 `claimDailyCoins`), które działają atomowo, więc szybkie podwójne kliknięcie nie wyda tych samych monet
 ani nie da podwójnej nagrody. Saldo nie może zejść poniżej zera (ograniczenie w bazie).
 
-**XP a monety:** XP nadal pochodzi z czatu i głosowego (poziomy zostają), a `/nagroda` daje wyłącznie monety.
-
-**Dziennik:** zdarzenia jednorazowe (nagrody, a w przyszłości zakupy i wygrane) zapisują się w tabeli
-`economy_transactions`. Zarobki z czatu i głosu **nie** są wpisywane pojedynczo (głosowy tick leci co minutę
-dla każdej osoby i zapełniłby bazę), tylko sumowane w licznikach konta.
+**Dziennik:** każda zmiana salda (nagrody, a w przyszłości zakupy i wygrane) zapisuje się w tabeli
+`economy_transactions`.
 
 Poziomy i drabinka ról na razie działają jak dotąd, równolegle do monet.
 

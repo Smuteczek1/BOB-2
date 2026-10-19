@@ -27,8 +27,6 @@ module.exports = {
 
     const balance = Number(account?.balance ?? 0);
     const totalEarned = Number(account?.total_earned ?? 0);
-    const earnedChat = Number(account?.earned_chat ?? 0);
-    const earnedVoice = Number(account?.earned_voice ?? 0);
 
     const embed = new EmbedBuilder()
       .setColor(0xf1c40f)
@@ -37,11 +35,7 @@ module.exports = {
         iconURL: target.displayAvatarURL(),
       })
       .setDescription(`${CURRENCY.emoji} Saldo: ${formatCoins(balance)}`)
-      .addFields(
-        { name: 'Zarobione łącznie', value: totalEarned.toLocaleString('pl-PL'), inline: true },
-        { name: '💬 Z czatu', value: earnedChat.toLocaleString('pl-PL'), inline: true },
-        { name: '🎙️ Z głosowego', value: earnedVoice.toLocaleString('pl-PL'), inline: true },
-      );
+      .addFields({ name: 'Zarobione łącznie', value: totalEarned.toLocaleString('pl-PL'), inline: true });
 
     // Historię operacji widzi tylko właściciel portfela
     if (isSelf) {
@@ -55,7 +49,6 @@ module.exports = {
           }).join('\n')
         : '_Brak operacji. Odbierz skrzynię komendą `/nagroda`!_';
       embed.addFields({ name: 'Ostatnie operacje', value: lines });
-      embed.setFooter({ text: 'Zarobki z czatu i głosu nie trafiają do historii, ale liczą się w saldzie.' });
     }
 
     await interaction.reply({ embeds: [embed] });

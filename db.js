@@ -75,9 +75,6 @@ async function applyCredit(client, guildId, userId, amount, reason, ledger) {
   return balance;
 }
 
-// Dozwolone źródła zarobków z aktywności -> kolumna w tabeli (lista stała, żadnych danych od użytkownika w SQL)
-const ACTIVITY_COLUMNS = { chat: 'earned_chat', voice: 'earned_voice' };
-
 // Inicjalizacja struktur bazy danych
 async function initDb() {
   try {
@@ -265,8 +262,6 @@ async function initDb() {
         user_id TEXT NOT NULL,
         balance BIGINT NOT NULL DEFAULT 0 CHECK (balance >= 0),
         total_earned BIGINT NOT NULL DEFAULT 0,
-        earned_chat BIGINT NOT NULL DEFAULT 0,
-        earned_voice BIGINT NOT NULL DEFAULT 0,
         created_at BIGINT NOT NULL,
         PRIMARY KEY (guild_id, user_id)
       );
@@ -581,24 +576,6 @@ module.exports = {
   async addCoins(guildId, userId, amount, reason) {
     if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error('addCoins: kwota musi być dodatnią liczbą całkowitą');
     return await withTransaction((client) => applyCredit(client, guildId, userId, amount, reason, true));
-  },
-
-  // Zarobki z aktywności (czat/głos): aktualizują saldo i licznik źródła, ale NIE tworzą wpisu w dzienniku,
-  // bo głosowy tick leci co minutę dla każdej osoby i szybko zapełniłby bazę.
-  async addActivityCoins(guildId, userId, amount, source) {
-    const column = ACTIVITY_COLUMNS[source];
-    if (!column) throw new Error(`addActivityCoins: nieznane źródło "${source}"`);
-    if (!Number.isSafeInteger(amount) || amount <= 0) return null;
-    const res = await query(`
-      INSERT INTO economy_accounts (guild_id, user_id, balance, total_earned, ${column}, created_at)
-      VALUES ($1, $2, $3::bigint, $3::bigint, $3::bigint, $4::bigint)
-      ON CONFLICT (guild_id, user_id) DO UPDATE
-        SET balance = economy_accounts.balance + $3::bigint,
-            total_earned = economy_accounts.total_earned + $3::bigint,
-            ${column} = economy_accounts.${column} + $3::bigint
-      RETURNING balance
-    `, [guildId, userId, amount, Date.now()]);
-    return Number(res.rows[0].balance);
   },
 
   // Odejmuje monety TYLKO jeśli saldo wystarcza (jedno zapytanie, więc dwa szybkie kliknięcia nie wydadzą tych samych monet).
