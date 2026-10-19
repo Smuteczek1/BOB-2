@@ -255,6 +255,16 @@ async function initDb() {
         ADD COLUMN IF NOT EXISTS message_count INT NOT NULL DEFAULT 0;
     `);
 
+    // --- Migracje jednorazowe (żeby nie uruchomić tej samej dwa razy) ---
+    await query(`
+      CREATE TABLE IF NOT EXISTS migrations (
+        id TEXT NOT NULL,
+        guild_id TEXT NOT NULL,
+        applied_at BIGINT NOT NULL,
+        PRIMARY KEY (id, guild_id)
+      );
+    `);
+
     // --- Ekonomia: konta i dziennik transakcji ---
     await query(`
       CREATE TABLE IF NOT EXISTS economy_accounts (
@@ -573,6 +583,34 @@ module.exports = {
         UPDATE user_levels SET last_daily_at = $1 WHERE guild_id = $2 AND user_id = $3
       `, [now, guildId, userId]);
     }
+  },
+
+  // --- MIGRACJA POZIOMÓW (jednorazowa) ---
+  // Ustawia XP i poziom z listy w JEDNEJ transakcji: albo wszystko, albo nic.
+  // Bez force: jeśli ta migracja już była wykonana na tym serwerze, nic nie zmienia
+  // (ponowne uruchomienie skasowałoby postępy zdobyte po pierwszym razie).
+  async applyLevelMigration(guildId, migrationId, rows, { resetCoins = false, force = false } = {}) {
+    return await withTransaction(async (client) => {
+      const marker = await client.query(`
+        INSERT INTO migrations (id, guild_id, applied_at) VALUES ($1, $2, $3::bigint)
+        ON CONFLICT (id, guild_id) DO UPDATE SET applied_at = EXCLUDED.applied_at WHERE $4::boolean
+        RETURNING id
+      `, [migrationId, guildId, Date.now(), force]);
+      if (marker.rowCount === 0) return { alreadyApplied: true };
+
+      for (const r of rows) {
+        await client.query(`
+          INSERT INTO user_levels (guild_id, user_id, xp, level) VALUES ($1, $2, $3, $4)
+          ON CONFLICT (guild_id, user_id) DO UPDATE SET xp = EXCLUDED.xp, level = EXCLUDED.level
+        `, [guildId, r.userId, r.xp, r.level]);
+      }
+
+      if (resetCoins) {
+        await client.query('UPDATE economy_accounts SET balance = 0, total_earned = 0 WHERE guild_id = $1', [guildId]);
+        await client.query('DELETE FROM economy_transactions WHERE guild_id = $1', [guildId]);
+      }
+      return { alreadyApplied: false, updated: rows.length };
+    });
   },
 
   // --- EKONOMIA ---
