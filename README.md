@@ -170,9 +170,9 @@ miejscu: `utils/economy.js` (obiekt `CURRENCY`).
 w `DAILY_TIERS` w `utils/economy.js`). Kolejne źródła (kasyno, projekty) dojdą w następnych etapach.
 **XP** nadal pochodzi wyłącznie z czatu i głosowego i nie ma z monetami nic wspólnego.
 
-**Animacja skrzyni:** `/nagroda` pokazuje publiczną animację (jedna wiadomość, 3 etapy z dużym paskiem w kolorach rzadkości, z komentarzem Boba).
-Nagroda jest zapisywana w bazie PRZED animacją, więc nawet przerwana animacja nie gubi monet.
-Tempo klatek zmienisz w `.env`: `CHEST_FRAME_DELAY_MS` (domyślnie 2000).
+**Animacja skrzyni:** `/nagroda` pokazuje publiczną grę: 3 skrzynie, wybierasz jedną przyciskiem (etap 1), skrzynia się otwiera (etap 2), a na końcu widać nagrodę i to, co było w pozostałych skrzyniach (etap 3), z komentarzem Boba. Dzienna nagroda zużywa się dopiero po wyborze, więc jeśli nie klikniesz, nic nie tracisz.
+Nagroda jest zapisywana w bazie od razu po wyborze, jeszcze przed odsłonięciem, więc nawet przerwana animacja nie gubi monet.
+Czas na wybór i długość etapu "otwieranie" zmienisz w `.env`: `CHEST_PICK_TIME_MS` (domyślnie 60000) i `CHEST_FRAME_DELAY_MS` (domyślnie 2000).
 
 **Bezpieczeństwo salda:** wszystkie zmiany idą przez funkcje w `db.js` (`addCoins`, `spendCoins`,
 `claimDailyCoins`), które działają atomowo, więc szybkie podwójne kliknięcie nie wyda tych samych monet
