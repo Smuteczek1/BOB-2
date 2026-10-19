@@ -23,6 +23,9 @@ const DAILY_TIERS = [
 // Czytelne nazwy powodów transakcji w /portfel
 const REASON_LABELS = {
   daily: 'Dzienna skrzynia',
+  casino_automat: 'Kasyno: automat',
+  casino_ruletka: 'Kasyno: ruletka',
+  casino_moneta: 'Kasyno: orzeł/reszka',
 };
 
 // ============================================================
