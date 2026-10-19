@@ -76,6 +76,82 @@ async function applyCredit(client, guildId, userId, amount, reason, ledger) {
 }
 
 // Inicjalizacja struktur bazy danych
+// ============================================================
+//  RESET DANYCH - rejestr "celów" resetu
+//  Każdy cel ma dwie funkcje: preview (ile danych zostanie dotkniętych) i apply (wykonanie, w transakcji).
+//  userId = null oznacza CAŁY serwer. Gdy dojdzie nowa funkcja (np. ekwipunek ze sklepu),
+//  wystarczy dopisać tu kolejny wpis i etykietę w commands/reset.js, reszta zadziała sama.
+// ============================================================
+const RESET_TARGETS = {
+  coins: {
+    async preview(guildId, userId) {
+      const res = await pool.query(`
+        SELECT COUNT(*)::int AS n, COALESCE(SUM(balance), 0)::bigint AS total
+        FROM economy_accounts
+        WHERE guild_id = $1 AND ($2::text IS NULL OR user_id = $2) AND (balance > 0 OR total_earned > 0)
+      `, [guildId, userId]);
+      return { people: res.rows[0].n, total: Number(res.rows[0].total) };
+    },
+    async apply(client, guildId, userId) {
+      const rows = (await client.query(`
+        SELECT user_id, balance, total_earned FROM economy_accounts
+        WHERE guild_id = $1 AND ($2::text IS NULL OR user_id = $2) AND (balance > 0 OR total_earned > 0)
+        FOR UPDATE
+      `, [guildId, userId])).rows;
+
+      // Zostawiamy ślad w dzienniku: kto stracił ile i dlaczego
+      for (const r of rows) {
+        const balance = Number(r.balance);
+        if (balance > 0) {
+          await client.query(`
+            INSERT INTO economy_transactions (guild_id, user_id, amount, balance_after, reason, created_at)
+            VALUES ($1, $2, $3::bigint, 0, 'reset', $4::bigint)
+          `, [guildId, r.user_id, -balance, Date.now()]);
+        }
+      }
+
+      await client.query(`
+        UPDATE economy_accounts SET balance = 0, total_earned = 0
+        WHERE guild_id = $1 AND ($2::text IS NULL OR user_id = $2) AND (balance > 0 OR total_earned > 0)
+      `, [guildId, userId]);
+
+      return {
+        userIds: rows.map((r) => r.user_id),
+        backup: rows.map((r) => ({ type: 'monety', userId: r.user_id, a: Number(r.balance), b: Number(r.total_earned) })),
+      };
+    },
+  },
+
+  xp: {
+    async preview(guildId, userId) {
+      const res = await pool.query(`
+        SELECT COUNT(*)::int AS n, COALESCE(SUM(xp), 0)::bigint AS total
+        FROM user_levels
+        WHERE guild_id = $1 AND ($2::text IS NULL OR user_id = $2) AND (xp > 0 OR level > 0)
+      `, [guildId, userId]);
+      return { people: res.rows[0].n, total: Number(res.rows[0].total) };
+    },
+    async apply(client, guildId, userId) {
+      const rows = (await client.query(`
+        SELECT user_id, xp, level FROM user_levels
+        WHERE guild_id = $1 AND ($2::text IS NULL OR user_id = $2) AND (xp > 0 OR level > 0)
+        FOR UPDATE
+      `, [guildId, userId])).rows;
+
+      // last_daily_at zostaje nietknięte, żeby reset EXP nie pozwalał odebrać dziennej nagrody drugi raz
+      await client.query(`
+        UPDATE user_levels SET xp = 0, level = 0
+        WHERE guild_id = $1 AND ($2::text IS NULL OR user_id = $2) AND (xp > 0 OR level > 0)
+      `, [guildId, userId]);
+
+      return {
+        userIds: rows.map((r) => r.user_id),
+        backup: rows.map((r) => ({ type: 'exp', userId: r.user_id, a: r.xp, b: r.level })),
+      };
+    },
+  },
+};
+
 async function initDb() {
   try {
     await query(`
@@ -253,16 +329,6 @@ async function initDb() {
         ADD COLUMN IF NOT EXISTS description TEXT,
         ADD COLUMN IF NOT EXISTS welcome_message_id TEXT,
         ADD COLUMN IF NOT EXISTS message_count INT NOT NULL DEFAULT 0;
-    `);
-
-    // --- Migracje jednorazowe (żeby nie uruchomić tej samej dwa razy) ---
-    await query(`
-      CREATE TABLE IF NOT EXISTS migrations (
-        id TEXT NOT NULL,
-        guild_id TEXT NOT NULL,
-        applied_at BIGINT NOT NULL,
-        PRIMARY KEY (id, guild_id)
-      );
     `);
 
     // --- Ekonomia: konta i dziennik transakcji ---
@@ -585,31 +651,23 @@ module.exports = {
     }
   },
 
-  // --- MIGRACJA POZIOMÓW (jednorazowa) ---
-  // Ustawia XP i poziom z listy w JEDNEJ transakcji: albo wszystko, albo nic.
-  // Bez force: jeśli ta migracja już była wykonana na tym serwerze, nic nie zmienia
-  // (ponowne uruchomienie skasowałoby postępy zdobyte po pierwszym razie).
-  async applyLevelMigration(guildId, migrationId, rows, { resetCoins = false, force = false } = {}) {
+  // --- RESET DANYCH ---
+  RESET_TARGET_KEYS: Object.keys(RESET_TARGETS),
+
+  // Podgląd: ile osób i ile "wartości" zostanie dotkniętych (nic nie zmienia)
+  async previewReset(guildId, userId, keys) {
+    const out = {};
+    for (const key of keys) out[key] = await RESET_TARGETS[key].preview(guildId, userId);
+    return out;
+  },
+
+  // Wykonuje reset wybranych celów w JEDNEJ transakcji (albo wszystko, albo nic).
+  // Zwraca dla każdego celu: userIds (kogo dotknęło) i backup (co było przed resetem).
+  async resetData(guildId, userId, keys) {
     return await withTransaction(async (client) => {
-      const marker = await client.query(`
-        INSERT INTO migrations (id, guild_id, applied_at) VALUES ($1, $2, $3::bigint)
-        ON CONFLICT (id, guild_id) DO UPDATE SET applied_at = EXCLUDED.applied_at WHERE $4::boolean
-        RETURNING id
-      `, [migrationId, guildId, Date.now(), force]);
-      if (marker.rowCount === 0) return { alreadyApplied: true };
-
-      for (const r of rows) {
-        await client.query(`
-          INSERT INTO user_levels (guild_id, user_id, xp, level) VALUES ($1, $2, $3, $4)
-          ON CONFLICT (guild_id, user_id) DO UPDATE SET xp = EXCLUDED.xp, level = EXCLUDED.level
-        `, [guildId, r.userId, r.xp, r.level]);
-      }
-
-      if (resetCoins) {
-        await client.query('UPDATE economy_accounts SET balance = 0, total_earned = 0 WHERE guild_id = $1', [guildId]);
-        await client.query('DELETE FROM economy_transactions WHERE guild_id = $1', [guildId]);
-      }
-      return { alreadyApplied: false, updated: rows.length };
+      const out = {};
+      for (const key of keys) out[key] = await RESET_TARGETS[key].apply(client, guildId, userId);
+      return out;
     });
   },
 

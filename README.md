@@ -91,7 +91,7 @@ npm start
 | `/setup-poziomy [kategoria] [nazwa_kanalu]` | Tworzy kanał ogłaszający kamienie milowe poziomów | Zarządzanie serwerem |
 | `/poziom [uzytkownik]` | Pokazuje Twój (lub czyjś) aktualny poziom i XP | Wszyscy |
 | `/eksport-poziomow` | Wysyła plik CSV z XP i poziomami wszystkich (kopia zapasowa) | Administrator |
-| `/migracja podglad` / `zastosuj` | Jednorazowy reset poziomów z pliku `data/migracja.csv` (z podglądem i potwierdzeniem) | Administrator |
+| `/reset co:[monety/exp/wszystko] [osoba]` | Zeruje monety i/lub EXP jednej osoby albo całego serwera (z podglądem, potwierdzeniem i kopią usuniętych danych) | Administrator |
 | `/portfel [uzytkownik]` | Pokazuje saldo monet, zarobione łącznie i (dla Ciebie) ostatnie operacje | Wszyscy |
 | `/nagroda` | Dzienna skrzynia z monetami (reset o północy, czas polski) | Wszyscy |
 | `/cclear kanal ilosc:<liczba/all> [uzytkownik]` | Usuwa wiadomości z bieżącego kanału | Zarządzanie wiadomościami |
@@ -183,19 +183,19 @@ ani nie da podwójnej nagrody. Saldo nie może zejść poniżej zera (ograniczen
 
 Poziomy i drabinka ról na razie działają jak dotąd, równolegle do monet.
 
-### Jednorazowy reset poziomów (migracja)
+### Jak działa /reset
 
-Wszystko jest jawne i da się je sprawdzić ręcznie:
+`/reset co:<monety | EXP i poziomy | wszystko> [osoba]`: zostaw `osoba` puste, żeby zresetować **cały serwer**.
 
-1. `/eksport-poziomow` zapisuje aktualny stan do pliku (to jest też Twoja kopia zapasowa).
-2. `node scripts/generuj-migracje.js scripts/poziomy-eksport.csv` tworzy `data/migracja.csv`.
-   Zasady są na górze skryptu: najwyższy poziom spada do `MAX_NEW_LEVEL` (20), reszta proporcjonalnie niżej,
-   a odznakę dostają osoby, które miały co najmniej `BADGE_MIN_OLD_LEVEL` (30) poziom.
-3. Plik `data/migracja.csv` możesz otworzyć w Excelu i poprawić ręcznie, bot użyje dokładnie tego, co w nim jest.
-4. `/migracja podglad` pokazuje podsumowanie (niczego nie zmienia).
-5. `/migracja zastosuj rola:@Byłem tu` pyta o potwierdzenie przyciskiem i dopiero wtedy zmienia dane.
-   Wszystkie zmiany w bazie dzieją się w jednej transakcji (albo wszystko, albo nic), a ponowne uruchomienie
-   jest zablokowane, żeby nie skasować postępów zdobytych po migracji (chyba że użyjesz opcji `wymus`).
+1. Bot najpierw pokazuje **podgląd** (ile osób i ile monet/XP zostanie dotkniętych). Nic jeszcze nie zmienia.
+2. Potwierdzasz przyciskiem. Przy resecie **całego serwera** trzeba dodatkowo wpisać słowo `RESET`.
+3. Wszystkie zmiany idą w **jednej transakcji** (albo wszystko, albo nic).
+4. Po resecie dostajesz **plik CSV z kopią** tego, co zostało usunięte. Reset monet zostawia też ślad w dzienniku (`economy_transactions`, powód `reset`).
+5. Po resecie EXP-a role za poziom wracają do najniższej (poziom 0). `last_daily_at` nie jest ruszane, więc reset nie pozwala odebrać dziennej skrzyni drugi raz.
+
+Reset nie dotyka statystyk czasu na kanałach głosowych (ranking rozmów).
+Gdy dojdzie nowa funkcja (np. ekwipunek ze sklepu), dopisz jej wpis w `RESET_TARGETS` w `db.js`
+oraz etykietę w `commands/reset.js`, a `/reset` obsłuży ją bez dalszych zmian.
 
 ### Jak działa /cclear
 
