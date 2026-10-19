@@ -2,19 +2,20 @@ const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js'
 const db = require('../db');
 const { rollDailyReward, formatCoins, CURRENCY, DAILY_TIERS } = require('../utils/economy');
 
-// Odstęp między klatkami animacji (ms). Można zmienić w .env: CHEST_FRAME_DELAY_MS
-const FRAME_DELAY_MS = Number(process.env.CHEST_FRAME_DELAY_MS ?? 1300);
+// Odstęp między etapami (ms). Discord ogranicza tempo edycji wiadomości i potrafi pomijać szybkie zmiany,
+// dlatego etapy są tylko 3 i dość wolne. Można zmienić w .env: CHEST_FRAME_DELAY_MS
+const STAGE_DELAY_MS = Number(process.env.CHEST_FRAME_DELAY_MS ?? 2000);
+const TOTAL_STAGES = 3;
 
-// Kolory "barowe": od ciemnego drewna do rozżarzonego złota
-const GOLD = 0xd4af37;
+// Duży pasek w kolorach rzadkości: jeden kwadrat na każdą rzadkość, w kolejności z DAILY_TIERS.
+// Ikonę bierzemy z początku nazwy rzadkości (np. "⚪ Pospolita Skrzynia" -> "⚪"), więc zmiana w economy.js
+// automatycznie zmienia też pasek.
+const TIER_SQUARES = DAILY_TIERS.map((t) => t.name.split(' ')[0]);
+const EMPTY_SQUARE = '⬛';
 
-// Klatki animacji: każda to jedna edycja tej samej, publicznej wiadomości
-const FRAMES = [
-  { color: 0x2b1d0e, bar: '▱▱▱▱▱▱', text: '📦 Skrzynia ląduje na barowej ladzie. Bob przeciera szklankę i patrzy spod oka...' },
-  { color: 0x4a3216, bar: '▰▰▱▱▱▱', text: '📦 Skrzynia zaczyna się trząść... 〰️ Dzwonią butelki na półce.' },
-  { color: 0x7a5420, bar: '▰▰▰▰▱▱', text: '🔒 Zamek trzeszczy, spod wieka przebija się światło...' },
-  { color: GOLD,     bar: '▰▰▰▰▰▰', text: '✨ **KLIK!** Wieko odskakuje...' },
-];
+function bar(lit) {
+  return TIER_SQUARES.map((sq, i) => (i < lit ? sq : EMPTY_SQUARE)).join(' ');
+}
 
 // Komentarz Boba do każdej rzadkości (kolejność jak w DAILY_TIERS)
 const BOB_QUIPS = [
@@ -27,14 +28,30 @@ const BOB_QUIPS = [
   'VOID. Czegoś takiego nie widziałem nigdy. Nikomu nie mów.',
 ];
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Etapy 1 i 2 (etap 3 to odsłonięcie nagrody). Pasek tylko rośnie: 0 -> ok. połowa drogi do wyniku -> cały wynik.
+const STAGES = [
+  {
+    color: 0x2b1d0e,
+    text: '📦 Skrzynia ląduje na barowej ladzie. Bob przeciera szklankę i patrzy spod oka...',
+    litFor: () => 0,
+  },
+  {
+    color: 0x7a5420,
+    text: '🔒 Zamek trzeszczy, wieko drży, a spod niego przebija się światło... ✨',
+    litFor: (tierIndex) => Math.max(1, Math.ceil((tierIndex + 1) / 2)),
+  },
+];
 
-function frameEmbed(frame, user) {
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const nameOf = (user) => user.displayName ?? user.username;
+
+function stageEmbed(stageNumber, user, tierIndex) {
+  const stage = STAGES[stageNumber - 1];
   return new EmbedBuilder()
-    .setColor(frame.color)
+    .setColor(stage.color)
     .setTitle('🎁 Dzienna skrzynia')
-    .setDescription(`${frame.text}\n\n\`${frame.bar}\``)
-    .setFooter({ text: `Skrzynię otwiera: ${user.displayName ?? user.username}` });
+    .setDescription(`${stage.text}\n\n# ${bar(stage.litFor(tierIndex))}`)
+    .setFooter({ text: `Etap ${stageNumber}/${TOTAL_STAGES} • skrzynię otwiera: ${nameOf(user)}` });
 }
 
 module.exports = {
@@ -59,41 +76,39 @@ module.exports = {
       return;
     }
 
-    // 2) Publiczna animacja: jedna wiadomość edytowana klatka po klatce, widoczna dla wszystkich na kanale
+    // 2) Publiczna animacja: jedna wiadomość, 3 etapy, widoczna dla wszystkich na kanale
+    const tierIndex = DAILY_TIERS.indexOf(tier);
     const noPings = { parse: [] };
     let animationOk = true;
 
     try {
       await interaction.reply({
         content: `${interaction.user} otwiera dzienną skrzynię!`,
-        embeds: [frameEmbed(FRAMES[0], interaction.user)],
+        embeds: [stageEmbed(1, interaction.user, tierIndex)],
         allowedMentions: noPings,
       });
-
-      for (let i = 1; i < FRAMES.length; i++) {
-        await sleep(FRAME_DELAY_MS);
-        await interaction.editReply({ embeds: [frameEmbed(FRAMES[i], interaction.user)] });
-      }
-      await sleep(FRAME_DELAY_MS);
+      await sleep(STAGE_DELAY_MS);
+      await interaction.editReply({ embeds: [stageEmbed(2, interaction.user, tierIndex)] });
+      await sleep(STAGE_DELAY_MS);
     } catch (err) {
-      // Np. ktoś usunął wiadomość w trakcie. Nagroda i tak jest już przyznana, więc pokażemy wynik osobno.
+      // Np. ktoś usunął wiadomość w trakcie. Nagroda jest już przyznana, więc pokażemy wynik osobno.
       animationOk = false;
       console.error('Animacja skrzyni przerwana:', err.message);
     }
 
-    // 3) Odsłonięcie nagrody
-    const tierIndex = DAILY_TIERS.indexOf(tier);
+    // 3) Etap 3/3: odsłonięcie. Pasek pokazuje, do której rzadkości "doszła" skrzynia.
     const isBig = tierIndex >= 4; // Mityczna i wyżej
     const reveal = new EmbedBuilder()
       .setColor(tier.color)
       .setTitle(isBig ? '🎆 NIESAMOWITE! 🎆' : '🎁 Skrzynia otwarta!')
       .setDescription(
-        `Wypadło: **${tier.name}**\n\n` +
+        `**KLIK!** Wypadło: **${tier.name}**\n\n` +
+        `# ${bar(tierIndex + 1)}\n\n` +
         `${CURRENCY.emoji} Nagroda: ${formatCoins(amount)}\n` +
         `Saldo: ${formatCoins(result.balance)}\n\n` +
         `🥃 *Bob: ${BOB_QUIPS[tierIndex] ?? ''}*`,
       )
-      .setFooter({ text: `Skrzynię otworzył(a): ${interaction.user.displayName ?? interaction.user.username} • kolejna jutro po 00:00` })
+      .setFooter({ text: `Etap ${TOTAL_STAGES}/${TOTAL_STAGES} • skrzynię otworzył(a): ${nameOf(interaction.user)} • kolejna jutro po 00:00` })
       .setTimestamp();
 
     const payload = {
