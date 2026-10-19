@@ -1,0 +1,19 @@
+{
+  "name": "discord-voice-hub-bot",
+  "version": "1.0.0",
+  "description": "Bot Discord: kanały głosowe tworzone na żądanie (Join to Create) + statystyki czasu rozmów (top 5 ogólnie / top 5 miesiąc)",
+  "main": "index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node --env-file=.env index.js",
+    "deploy": "node --env-file=.env deploy-commands.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.25.1",
+    "express": "^4.19.2",
+    "pg": "^8.11.0"
+  }
+}
