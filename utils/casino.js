@@ -72,6 +72,7 @@ const ROULETTE_BETS = {
   nieparzyste: { label: 'Nieparzyste', multiplier: 2, test: (n) => n % 2 === 1 },
   niskie: { label: 'Niskie (1-18)', multiplier: 2, test: (n) => n >= 1 && n <= 18 },
   wysokie: { label: 'Wysokie (19-36)', multiplier: 2, test: (n) => n >= 19 },
+  zielone: { label: '🟢 Zielone (0)', multiplier: 36, test: (n) => n === 0 },
   numer: { label: 'Numer', multiplier: 36, test: null },
 };
 
