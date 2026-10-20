@@ -131,14 +131,17 @@ async function onClick(click, session) {
       .setCustomId(`lotto_modal_${click.id}`)
       .setTitle('Twoje liczby')
       .addComponents(
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId('numbers')
-            .setLabel(`Wpisz ${PICK} różne liczby z zakresu 1-${RANGE}`)
-            .setPlaceholder('np. 3 7 15 28')
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true)
-            .setMaxLength(40),
+        ...Array.from({ length: PICK }, (_, i) =>
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId(`n${i}`)
+              .setLabel(`Liczba ${i + 1} (1-${RANGE})`)
+              .setPlaceholder('np. 7')
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+              .setMinLength(1)
+              .setMaxLength(String(RANGE).length),
+          ),
         ),
       );
     await click.showModal(modal);
@@ -146,12 +149,14 @@ async function onClick(click, session) {
       .awaitModalSubmit({ filter: (i) => i.customId === modal.data.custom_id && i.user.id === click.user.id, time: 120_000 })
       .catch(() => null);
     if (!submit) return; // okienko zamknięte bez wysłania
-    const nums = lotto.normalizeNumbers(submit.fields.getTextInputValue('numbers').split(/\D+/).filter(Boolean));
+    const nums = lotto.normalizeNumbers(
+      Array.from({ length: PICK }, (_, i) => submit.fields.getTextInputValue(`n${i}`).trim()),
+    );
     if (nums) {
       state.selected = nums;
       state.notice = null;
     } else {
-      state.notice = `⚠️ Wpisz dokładnie ${PICK} różne liczby z zakresu 1-${RANGE}.`;
+      state.notice = `⚠️ Wpisz ${PICK} różne liczby z zakresu 1-${RANGE} (bez powtórek i liter).`;
     }
     return submit.update(await buildPanel(session));
   }
