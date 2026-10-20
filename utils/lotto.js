@@ -8,23 +8,38 @@ const { formatCoins } = require('./economy');
 const PRICE = Number(process.env.LOTTO_TICKET_PRICE ?? 100); // cena jednego losu
 const MAX_TICKETS = Number(process.env.LOTTO_MAX_TICKETS ?? 5); // ile losów na osobę na jedno losowanie
 const PICK = Number(process.env.LOTTO_PICK ?? 4); // ile liczb wybiera gracz
-const RANGE = Number(process.env.LOTTO_RANGE ?? 12); // z ilu liczb (1..RANGE); max 25 (limit menu Discorda)
+const RANGE = Number(process.env.LOTTO_RANGE ?? 30); // z ilu liczb (1..RANGE); max 50 (menu ma dwie listy po max 25)
 const DRAW_HOUR = Number(process.env.LOTTO_DRAW_HOUR ?? 20); // godzina losowania (czas polski)
 
+// Kumulacja: startowa kwota jest LOSOWANA (zawsze wielokrotność ROUND_STEP) na starcie i po każdej wygranej,
+// a po każdym losowaniu pula jest zaokrąglana W GÓRĘ do pełnych ROUND_STEP (np. 12 854 -> 13 000).
+// Te monety dorzuca "Bob" (powstają z niczego), a ich sumę zapisujemy w lotto_state.house_total.
+const ROUND_STEP = Number(process.env.LOTTO_ROUND ?? 500);
+const SEED_MIN = Number(process.env.LOTTO_SEED_MIN ?? 2000);
+const SEED_MAX = Number(process.env.LOTTO_SEED_MAX ?? 10000);
+
 // Drobne nagrody (wielokrotność ceny losu), płacone Z PULI:
-//  - trafione PICK-2 liczb -> zwrot ceny losu
-//  - trafione PICK-1 liczb -> trzykrotność ceny losu
+//  - trafione PICK-2 liczb -> dwukrotność ceny losu
+//  - trafione PICK-1 liczb -> dziesięciokrotność ceny losu
 //  - trafione WSZYSTKIE liczby -> cała pula (kumulacja), dzielona między zwycięzców
-const PRIZE_MULTIPLIERS = { [PICK - 2]: 1, [PICK - 1]: 3 };
+const PRIZE_MULTIPLIERS = { [PICK - 2]: 2, [PICK - 1]: 10 };
 // Drobne nagrody łącznie nie mogą zjeść więcej niż ta część puli, żeby kumulacja nigdy nie była pusta.
 // Gdyby w danym losowaniu przekroczyły limit, są proporcjonalnie zmniejszane (rzadkie, głównie na starcie).
 const SMALL_PRIZE_CAP = 0.75;
 
-if (PICK < 3 || PICK >= RANGE || RANGE > 25) {
-  throw new Error('Lotto: ustaw LOTTO_PICK >= 3, LOTTO_PICK < LOTTO_RANGE oraz LOTTO_RANGE <= 25');
+if (PICK < 3 || PICK >= RANGE || RANGE > 50) {
+  throw new Error('Lotto: ustaw LOTTO_PICK >= 3, LOTTO_PICK < LOTTO_RANGE oraz LOTTO_RANGE <= 50');
+}
+if (ROUND_STEP < 1 || SEED_MIN > SEED_MAX || SEED_MIN % ROUND_STEP !== 0 || SEED_MAX % ROUND_STEP !== 0) {
+  throw new Error('Lotto: LOTTO_SEED_MIN i LOTTO_SEED_MAX muszą być wielokrotnościami LOTTO_ROUND i SEED_MIN <= SEED_MAX');
 }
 
 const prizeFor = (matches) => (PRIZE_MULTIPLIERS[matches] ?? 0) * PRICE;
+
+// Zaokrąglenie w górę do pełnych ROUND_STEP (12 854 -> 13 000, 13 000 -> 13 000)
+const roundUp = (n) => Math.ceil(n / ROUND_STEP) * ROUND_STEP;
+// Losowa startowa kumulacja: wielokrotność ROUND_STEP z przedziału [SEED_MIN, SEED_MAX]
+const randomSeed = () => SEED_MIN + ROUND_STEP * randomInt(0, (SEED_MAX - SEED_MIN) / ROUND_STEP + 1);
 
 // ============================================================
 //  CZAS (Europe/Warsaw) - bez zależności od strefy serwera hostującego
@@ -137,6 +152,15 @@ function ensureSchema() {
           drawn_at BIGINT NOT NULL
         );
       `)
+      // Nowe kolumny dodajemy bezpiecznie, żeby aktualizacja ze starszej wersji nie kasowała danych.
+      // seeded: czy kumulacja dostała już losową kwotę startową. house_total: ile monet łącznie dorzucił Bob.
+      .then(() => getPool().query(`
+        ALTER TABLE lotto_state
+          ADD COLUMN IF NOT EXISTS seeded BOOLEAN NOT NULL DEFAULT false,
+          ADD COLUMN IF NOT EXISTS house_total BIGINT NOT NULL DEFAULT 0;
+        ALTER TABLE lotto_draws
+          ADD COLUMN IF NOT EXISTS house_added BIGINT NOT NULL DEFAULT 0;
+      `))
       .catch((err) => {
         schemaPromise = null; // pozwól spróbować ponownie
         throw err;
@@ -182,12 +206,32 @@ async function getStatus(guildId, userId, nowMs = Date.now()) {
   };
 }
 
+// Nadaje kumulacji LOSOWĄ kwotę startową (wielokrotność ROUND_STEP), jeśli jeszcze jej nie ma.
+// Do kwoty wpada to, co już jest w puli (np. z testów), zaokrąglone w górę; różnicę dorzuca Bob.
+// Wywoływane wewnątrz transakcji na zablokowanym wierszu puli.
+async function seedIfNeeded(c, state) {
+  if (state.seeded) return { seeded: false, pool: Number(state.pool), added: 0 };
+  const before = Number(state.pool);
+  const pool = roundUp(before + randomSeed());
+  const added = pool - before;
+  await c.query(
+    'UPDATE lotto_state SET pool = $2::bigint, seeded = true, house_total = house_total + $3::bigint WHERE guild_id = $1',
+    [state.guild_id, pool, added],
+  );
+  return { seeded: true, pool, added };
+}
+
+// Ustawia kanał ogłoszeń i (przy pierwszej konfiguracji) losuje startową kumulację.
+// Zwraca { seededNow, pool }: seededNow = true, gdy właśnie ruszyła pierwsza kumulacja (warto ją ogłosić).
 async function setAnnounceChannel(guildId, channelId) {
   await ensureSchema();
-  await getPool().query(`
-    INSERT INTO lotto_state (guild_id, pool, channel_id) VALUES ($1, 0, $2)
-    ON CONFLICT (guild_id) DO UPDATE SET channel_id = EXCLUDED.channel_id
-  `, [guildId, channelId]);
+  return tx(async (c) => {
+    await c.query('INSERT INTO lotto_state (guild_id, pool) VALUES ($1, 0) ON CONFLICT (guild_id) DO NOTHING', [guildId]);
+    const state = (await c.query('SELECT * FROM lotto_state WHERE guild_id = $1 FOR UPDATE', [guildId])).rows[0];
+    await c.query('UPDATE lotto_state SET channel_id = $2 WHERE guild_id = $1', [guildId, channelId]);
+    const seed = await seedIfNeeded(c, state);
+    return { seededNow: seed.seeded, pool: seed.pool };
+  });
 }
 
 // ---------------- ZAKUP LOSU ----------------
@@ -224,6 +268,9 @@ async function buyTicket(guildId, userId, numbers, nowMs = Date.now()) {
       VALUES ($1, $2, $3, $4, 'open', $5::bigint) RETURNING id
     `, [guildId, userId, nums.join(','), drawDate, nowMs])).rows[0];
 
+    // Jeśli nikt jeszcze nie uruchomił kumulacji (np. brak /setup-lotto), pierwszy zakup losuje jej kwotę startową.
+    await seedIfNeeded(c, state);
+
     const pool = Number((await c.query(
       'UPDATE lotto_state SET pool = pool + $2::bigint WHERE guild_id = $1 RETURNING pool',
       [guildId, PRICE],
@@ -256,11 +303,17 @@ async function runDraw(guildId, todayDate, nowMs = Date.now(), forcedNumbers = n
       [guildId, todayDate],
     )).rows;
 
-    const poolBefore = Number(state.pool);
+    // Kumulacja bez kwoty startowej (stara wersja tabel albo brak konfiguracji) dostaje ją tuż przed losowaniem
+    const seed = await seedIfNeeded(c, state);
+    const poolBefore = seed.seeded ? seed.pool : Number(state.pool);
 
     if (tickets.length === 0) {
-      await c.query('UPDATE lotto_state SET last_draw_date = $2 WHERE guild_id = $1', [guildId, todayDate]);
-      return { skipped: true, drawDate: todayDate, poolBefore, poolAfter: poolBefore };
+      const rolled = roundUp(poolBefore);
+      await c.query(
+        'UPDATE lotto_state SET pool = $2::bigint, last_draw_date = $3, house_total = house_total + $4::bigint WHERE guild_id = $1',
+        [guildId, rolled, todayDate, rolled - poolBefore],
+      );
+      return { skipped: true, drawDate: todayDate, poolBefore, poolAfter: rolled, houseAdded: rolled - poolBefore };
     }
 
     const drawn = forcedNumbers ?? pickDistinct();
@@ -286,7 +339,13 @@ async function runDraw(guildId, todayDate, nowMs = Date.now(), forcedNumbers = n
     const remaining = poolBefore - smallPaid;
     const jackpotEach = jackpotTickets.length > 0 ? Math.floor(remaining / jackpotTickets.length) : 0;
     for (const t of jackpotTickets) t.prize = jackpotEach;
-    const poolAfter = jackpotTickets.length > 0 ? remaining - jackpotEach * jackpotTickets.length : remaining;
+    const poolRemaining = jackpotTickets.length > 0 ? remaining - jackpotEach * jackpotTickets.length : remaining;
+
+    // 3b) nowa pula: po wygranej startuje NOWA, losowa kumulacja; bez wygranej reszta przechodzi dalej.
+    // W obu przypadkach pula jest zaokrąglana w górę do pełnych ROUND_STEP, a różnicę dorzuca Bob.
+    const newCycle = jackpotTickets.length > 0;
+    const poolAfter = roundUp(newCycle ? poolRemaining + randomSeed() : poolRemaining);
+    const houseAdded = poolAfter - poolRemaining;
 
     // 4) wypłaty: jedna wpłata i jeden wpis w dzienniku na osobę
     const totalByUser = new Map();
@@ -312,11 +371,14 @@ async function runDraw(guildId, todayDate, nowMs = Date.now(), forcedNumbers = n
         [t.id, t.matches, t.prize],
       );
     }
-    await c.query('UPDATE lotto_state SET pool = $2::bigint, last_draw_date = $3 WHERE guild_id = $1', [guildId, poolAfter, todayDate]);
+    await c.query(
+      'UPDATE lotto_state SET pool = $2::bigint, last_draw_date = $3, house_total = house_total + $4::bigint WHERE guild_id = $1',
+      [guildId, poolAfter, todayDate, houseAdded],
+    );
     await c.query(`
-      INSERT INTO lotto_draws (guild_id, draw_date, numbers, tickets, pool_before, small_paid, jackpot_winners, jackpot_each, pool_after, drawn_at)
-      VALUES ($1, $2, $3, $4, $5::bigint, $6::bigint, $7, $8::bigint, $9::bigint, $10::bigint)
-    `, [guildId, todayDate, drawn.join(','), tickets.length, poolBefore, smallPaid, jackpotTickets.length, jackpotEach, poolAfter, nowMs]);
+      INSERT INTO lotto_draws (guild_id, draw_date, numbers, tickets, pool_before, small_paid, jackpot_winners, jackpot_each, pool_after, house_added, drawn_at)
+      VALUES ($1, $2, $3, $4, $5::bigint, $6::bigint, $7, $8::bigint, $9::bigint, $10::bigint, $11::bigint)
+    `, [guildId, todayDate, drawn.join(','), tickets.length, poolBefore, smallPaid, jackpotTickets.length, jackpotEach, poolAfter, houseAdded, nowMs]);
 
     const tiers = {};
     for (const t of graded) if (t.matches < PICK && t.prize > 0) tiers[t.matches] = (tiers[t.matches] ?? 0) + 1;
@@ -332,7 +394,10 @@ async function runDraw(guildId, todayDate, nowMs = Date.now(), forcedNumbers = n
       tiers,
       jackpotWinners: jackpotTickets.map((t) => t.userId),
       jackpotEach,
+      poolRemaining,
       poolAfter,
+      houseAdded,
+      newCycle,
       totalByUser,
     };
   });
@@ -353,7 +418,7 @@ function buildAnnouncement(summary) {
 
   if (jackpotHit) {
     lines.push(
-      `💰 **KUMULACJA TRAFIONA!** Pulę ${formatCoins(summary.poolBefore - summary.smallPaid)} zgarnia:`,
+      `💰 **KUMULACJA TRAFIONA!** Pulę ${formatCoins(summary.jackpotEach * summary.jackpotWinners.length)} zgarnia:`,
       ...uniqueWinners.map((id) => {
         const n = summary.jackpotWinners.filter((w) => w === id).length;
         return `• <@${id}> — ${formatCoins(summary.jackpotEach * n)}`;
@@ -369,13 +434,33 @@ function buildAnnouncement(summary) {
     .map((m) => `• trafione **${m}**: ${summary.tiers[m]} ${summary.tiers[m] === 1 ? 'los' : 'losów'} po ${formatCoins(prizeFor(m))}${summary.scaled ? ' (zmniejszone, bo pula była mała)' : ''}`);
   if (tierLines.length > 0) lines.push('', '**Drobne nagrody:**', ...tierLines);
 
-  lines.push('', `🎟️ **Kumulacja na następne losowanie: ${formatCoins(summary.poolAfter)}**`);
+  // Po wygranej nową, losową kumulację ogłasza osobna wiadomość (buildStartAnnouncement)
+  if (!jackpotHit) {
+    const topUp = summary.houseAdded > 0 ? ` _(Bob dorzucił ${formatCoins(summary.houseAdded)}, żeby pula była okrągła)_` : '';
+    lines.push('', `🎟️ **Kumulacja na następne losowanie: ${formatCoins(summary.poolAfter)}**${topUp}`);
+  }
 
   return new EmbedBuilder()
     .setColor(jackpotHit ? 0xf1c40f : 0x3498db)
     .setTitle(jackpotHit ? '🎉 Lotto Boba: JACKPOT!' : '🎱 Lotto Boba: wyniki losowania')
     .setDescription(lines.join('\n'))
     .setFooter({ text: `Losowanie z dnia ${summary.drawDate}. Nowe losy: /lotto` })
+    .setTimestamp();
+}
+
+// Wiadomość o startowej kumulacji: przy pierwszym uruchomieniu i po każdej wygranej
+function buildStartAnnouncement(pool, { first = false } = {}) {
+  return new EmbedBuilder()
+    .setColor(0x2ecc71)
+    .setTitle(first ? '🎱 Lotto Boba rusza!' : '🌱 Startuje nowa kumulacja!')
+    .setDescription(
+      `# 🎟️ ${formatCoins(pool)}\n` +
+      `Tyle Bob wrzucił do puli na start. Każdy kupiony los (${formatCoins(PRICE)}) dokłada się do kumulacji, ` +
+      `a jeśli nikt nie trafi wszystkich liczb, pula przechodzi na następny dzień.\n\n` +
+      `Zasady: wybierasz **${PICK} liczby z ${RANGE}**, maksymalnie **${MAX_TICKETS} losów** na losowanie. ` +
+      `Losowanie codziennie o **${DRAW_HOUR}:00**. Kup los: \`/lotto\``,
+    )
+    .setFooter({ text: 'Kumulacja jest po każdym losowaniu zaokrąglana w górę do pełnych 500 monet.' })
     .setTimestamp();
 }
 
@@ -397,6 +482,13 @@ async function announce(client, guildId, summary) {
       console.error('Lotto: nie wysłano ogłoszenia:', err.message);
       return null;
     });
+
+  // Po wygranej: osobna wiadomość z nową, wylosowaną kumulacją startową
+  if (summary.newCycle) {
+    await channel
+      .send({ embeds: [buildStartAnnouncement(summary.poolAfter)], allowedMentions: { parse: [] } })
+      .catch((err) => console.error('Lotto: nie wysłano ogłoszenia nowej kumulacji:', err.message));
+  }
   return Boolean(sent);
 }
 
@@ -449,9 +541,14 @@ module.exports = {
   PICK,
   RANGE,
   DRAW_HOUR,
+  ROUND_STEP,
+  SEED_MIN,
+  SEED_MAX,
   SMALL_PRIZE_CAP,
   PRIZE_MULTIPLIERS,
   prizeFor,
+  roundUp,
+  randomSeed,
   warsawParts,
   addDays,
   drawTimestamp,
@@ -466,6 +563,7 @@ module.exports = {
   buyTicket,
   runDraw,
   buildAnnouncement,
+  buildStartAnnouncement,
   tick,
   startScheduler,
 };

@@ -30,7 +30,14 @@ module.exports = {
       return;
     }
 
-    await lotto.setAnnounceChannel(interaction.guild.id, channel.id);
+    const { seededNow, pool } = await lotto.setAnnounceChannel(interaction.guild.id, channel.id);
+
+    // Pierwsza konfiguracja: Bob losuje startową kumulację i od razu ogłasza ją na wybranym kanale
+    if (seededNow) {
+      await channel
+        .send({ embeds: [lotto.buildStartAnnouncement(pool, { first: true })], allowedMentions: { parse: [] } })
+        .catch((err) => console.error('Lotto: nie wysłano wiadomości startowej:', err.message));
+    }
 
     await interaction.reply({
       content:

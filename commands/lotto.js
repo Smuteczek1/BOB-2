@@ -20,13 +20,24 @@ const MENU_MAX_MS = 14 * 60 * 1000;
 
 const { PICK, RANGE, PRICE, MAX_TICKETS } = lotto;
 
+// Discord pozwala na max 25 pozycji w jednej liście rozwijanej, więc przy większym zakresie liczb
+// (domyślnie 30) dzielimy je na kilka list o podobnej długości, np. 1-15 i 16-30.
+const CHUNKS = (() => {
+  const count = Math.ceil(RANGE / 25);
+  const size = Math.ceil(RANGE / count);
+  return Array.from({ length: count }, (_, i) => ({ index: i, from: i * size + 1, to: Math.min(RANGE, (i + 1) * size) }));
+})();
+
 function prizeLines() {
   const lines = [`🏆 Trafione **${PICK} z ${PICK}**: **cała kumulacja** (dzielona, jeśli trafi kilka osób)`];
   for (let m = PICK - 1; m >= PICK - 2; m--) {
     const prize = lotto.prizeFor(m);
     lines.push(`• Trafione **${m}**: ${formatCoins(prize)}${prize === PRICE ? ' (zwrot losu)' : ''}`);
   }
-  lines.push('Jeśli nikt nie trafi wszystkich liczb, pula przechodzi na następne losowanie.');
+  lines.push(
+    'Jeśli nikt nie trafi wszystkich liczb, pula przechodzi na następne losowanie. ' +
+    `Po każdym losowaniu Bob zaokrągla ją w górę do pełnych ${lotto.ROUND_STEP}, a po wygranej startuje nowa, losowa kumulacja.`,
+  );
   return lines.join('\n');
 }
 
@@ -37,6 +48,7 @@ async function buildPanel(session, { disabled = false } = {}) {
 
   const atLimit = status.tickets.length >= MAX_TICKETS;
   const ready = state.selected.length === PICK;
+  const tooMany = state.selected.length > PICK;
 
   const ticketList = status.tickets.length
     ? status.tickets.map((t, i) => `${i + 1}. **${lotto.formatNumbers(t.numbers)}**`).join('\n')
@@ -51,8 +63,9 @@ async function buildPanel(session, { disabled = false } = {}) {
     ticketList,
     '',
     state.selected.length > 0
-      ? `**Wybrane liczby:** ${lotto.formatNumbers(state.selected)}${ready ? '' : ` _(wybierz jeszcze ${PICK - state.selected.length})_`}`
-      : `Wybierz ${PICK} liczby z listy poniżej albo kliknij 🎲, żeby wylosować.`,
+      ? `**Wybrane liczby:** ${lotto.formatNumbers(state.selected)}` +
+        (ready ? '' : tooMany ? ` _(za dużo, odznacz ${state.selected.length - PICK})_` : ` _(wybierz jeszcze ${PICK - state.selected.length})_`)
+      : `Wybierz ${PICK} liczby z list poniżej albo kliknij 🎲, żeby wylosować.`,
   ];
   if (state.notice) lines.unshift(state.notice, '');
 
@@ -63,19 +76,26 @@ async function buildPanel(session, { disabled = false } = {}) {
     .addFields({ name: 'Nagrody', value: prizeLines() })
     .setFooter({ text: 'To menu widzisz tylko Ty. Wyniki losowania ogłasza Bob publicznie.' });
 
-  const select = new StringSelectMenuBuilder()
-    .setCustomId('lotto_pick')
-    .setPlaceholder(`Wybierz ${PICK} liczby (1-${RANGE})`)
-    .setMinValues(PICK)
-    .setMaxValues(PICK)
-    .setDisabled(disabled || atLimit)
-    .addOptions(
-      Array.from({ length: RANGE }, (_, i) => ({
-        label: String(i + 1),
-        value: String(i + 1),
-        default: state.selected.includes(i + 1),
-      })),
-    );
+  // Jedna lista, gdy wszystkie liczby się mieszczą (wtedy Discord pilnuje dokładnie PICK wyborów);
+  // inaczej kilka list, z których wybierasz łącznie PICK liczb (min 0, bo możesz zostawić listę pustą).
+  const selectRows = CHUNKS.map((chunk) => {
+    const size = chunk.to - chunk.from + 1;
+    const single = CHUNKS.length === 1;
+    const select = new StringSelectMenuBuilder()
+      .setCustomId(`lotto_pick_${chunk.index}`)
+      .setPlaceholder(single ? `Wybierz ${PICK} liczby (1-${RANGE})` : `Liczby ${chunk.from}-${chunk.to}`)
+      .setMinValues(single ? PICK : 0)
+      .setMaxValues(Math.min(PICK, size))
+      .setDisabled(disabled || atLimit)
+      .addOptions(
+        Array.from({ length: size }, (_, i) => ({
+          label: String(chunk.from + i),
+          value: String(chunk.from + i),
+          default: state.selected.includes(chunk.from + i),
+        })),
+      );
+    return new ActionRowBuilder().addComponents(select);
+  });
 
   const buttons = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -99,7 +119,7 @@ async function buildPanel(session, { disabled = false } = {}) {
     new ButtonBuilder().setCustomId('lotto_close').setLabel('Zamknij').setEmoji('✖️').setStyle(ButtonStyle.Danger).setDisabled(disabled),
   );
 
-  return { content: '', embeds: [embed], components: [new ActionRowBuilder().addComponents(select), buttons] };
+  return { content: '', embeds: [embed], components: [...selectRows, buttons] };
 }
 
 const BUY_ERRORS = {
@@ -127,9 +147,13 @@ async function onClick(click, session) {
   const { state } = session;
   const id = click.customId;
 
-  if (id === 'lotto_pick') {
-    const nums = lotto.normalizeNumbers(click.values);
-    if (nums) state.selected = nums;
+  if (id.startsWith('lotto_pick_')) {
+    const chunk = CHUNKS[Number(id.slice('lotto_pick_'.length))];
+    if (!chunk) return click.deferUpdate();
+    // Każda lista odpowiada za swój zakres: liczby z innych list zostają, a ta lista nadpisuje tylko swój kawałek.
+    const outside = state.selected.filter((n) => n < chunk.from || n > chunk.to);
+    const inside = click.values.map(Number).filter((n) => Number.isInteger(n) && n >= chunk.from && n <= chunk.to);
+    state.selected = [...outside, ...inside].sort((a, b) => a - b);
     state.notice = null;
     return click.update(await buildPanel(session));
   }
@@ -163,7 +187,7 @@ function newSession(interaction) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('lotto')
-    .setDescription('Lotto Boba: kup los za 100 monet i trafiaj kumulację. Menu jest prywatne.')
+    .setDescription('Lotto Boba: kup los i trafiaj kumulację. Menu jest prywatne.')
     .setDMPermission(false),
 
   async execute(interaction) {
