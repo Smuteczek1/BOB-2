@@ -73,7 +73,7 @@ function rulesEmbed() {
       { name: `🎰 Automat (zwrot ${fmtPct(casino.slotRtp())})`, value: `${slotLines}\n${pairLines}`, inline: true },
       {
         name: `🎡 Ruletka (zwrot ${fmtPct(casino.rouletteRtp('czerwone'))})`,
-        value: 'Kolor, parzystość, połowa: **x2**\nKonkretny numer: **x36**\nZero przegrywa wszystko.',
+        value: 'Kolor, parzystość, połowa: **x2**\n🟢 Zielone (zero) lub konkretny numer: **x36**\nZero przegrywa wszystkie inne zakłady.',
         inline: true,
       },
       { name: `🪙 Orzeł/reszka (zwrot ${fmtPct(casino.coinRtp())})`, value: 'Szansa **48%**, wygrana **x2**.', inline: true },
