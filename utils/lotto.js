@@ -8,7 +8,7 @@ const { formatCoins } = require('./economy');
 const PRICE = Number(process.env.LOTTO_TICKET_PRICE ?? 100); // cena jednego losu
 const MAX_TICKETS = Number(process.env.LOTTO_MAX_TICKETS ?? 5); // ile losów na osobę na jedno losowanie
 const PICK = Number(process.env.LOTTO_PICK ?? 4); // ile liczb wybiera gracz
-const RANGE = Number(process.env.LOTTO_RANGE ?? 30); // z ilu liczb (1..RANGE); max 50 (menu ma dwie listy po max 25)
+const RANGE = Number(process.env.LOTTO_RANGE ?? 25); // z ilu liczb (1..RANGE); 25 = max jednej listy w Discordzie
 const DRAW_HOUR = Number(process.env.LOTTO_DRAW_HOUR ?? 20); // godzina losowania (czas polski)
 
 // Kumulacja: startowa kwota jest LOSOWANA (zawsze wielokrotność ROUND_STEP) na starcie i po każdej wygranej,
