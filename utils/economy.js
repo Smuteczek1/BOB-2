@@ -26,6 +26,8 @@ const REASON_LABELS = {
   casino_automat: 'Kasyno: automat',
   casino_ruletka: 'Kasyno: ruletka',
   casino_moneta: 'Kasyno: orzeł/reszka',
+  lotto_ticket: 'Lotto: los',
+  lotto_win: 'Lotto: wygrana',
 };
 
 // ============================================================
