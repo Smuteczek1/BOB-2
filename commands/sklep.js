@@ -19,14 +19,16 @@ const chestSummary = (c) =>
     ? `monety ${fmt(c.coins[0])}–${fmt(c.coins[1])} · szansa na przedmiot ${Math.round(c.itemChance * 100)}%`
     : 'zawsze wypada przedmiot (bez monet)';
 
+const tierNamesShort = (c) => items.tierOdds(c).map((t) => items.TIER_NAMES[t.tier]).join(', ');
+
 const chestShort = (c) => (c.coins
   ? `${fmt(c.coins[0])}–${fmt(c.coins[1])} monet + szansa na przedmiot ${Math.round(c.itemChance * 100)}%`
-  : `Zawsze przedmiot z puli: ${items.poolOdds(c).slice(0, 3).map((e) => e.def.name).join(', ')}...`);
+  : `Zawsze przedmiot. Poziomy: ${tierNamesShort(c)}`);
 
-// Lista przedmiotów w skrzyni z szansami (jeśli przedmiot wypadnie)
+// Lista poziomów rzadkości, które mogą wypaść ze skrzyni, z szansami
 const poolLines = (c) =>
-  items.poolOdds(c)
-    .map((e) => `${e.def.emoji} ${e.def.name} · ${pctText(e.pct)}`)
+  items.tierOdds(c)
+    .map((t) => `${items.TIER_ICONS[t.tier]} ${items.TIER_NAMES[t.tier]} · ${pctText(t.pct)}`)
     .join('\n');
 
 async function buildView(guildId, user, selectedId, banner) {
@@ -38,12 +40,12 @@ async function buildView(guildId, user, selectedId, banner) {
     .setColor(0xd4af37)
     .setTitle('🛒 Sklep Boba')
     .setDescription(
-      'Przedmiotów nie kupisz. **Wypadają ze skrzyń**, a każda z trzech ma własną pulę. Kupujesz skrzynię, a otwierasz ją w `/ekwipunek`.\n' +
+      'Przedmiotów nie kupisz. **Wypadają ze skrzyń**, a każda z trzech losuje przedmioty z innych poziomów rzadkości. Kupujesz skrzynię, a otwierasz ją w `/ekwipunek`.\n' +
       `Twoje saldo: ${formatCoins(balance)}`,
     )
     .addFields(all.map((c) => ({
       name: `${c.id === selectedId ? '▶ ' : ''}${c.emoji} ${c.name} · ${formatCoins(c.price)}`,
-      value: `${chestSummary(c)}\n**Co może w niej być:**\n${poolLines(c)}`,
+      value: `${chestSummary(c)}\n**Poziomy przedmiotów, które mogą wypaść:**\n${poolLines(c)}`,
     })))
     .setFooter({ text: 'Skrzynię otwierasz w /ekwipunek: wybierasz jedną z trzech. Kolory nicków dojdą wkrótce.' });
 

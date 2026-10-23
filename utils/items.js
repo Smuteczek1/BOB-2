@@ -168,27 +168,27 @@ const ITEMS = {
 };
 
 // ---------------- SKRZYNIE DO KUPIENIA (SKLEP) ----------------
-// Sklep ma 3 skrzynie. Każda ma własną, WIDOCZNĄ pulę przedmiotów (pool):
-//   pool = [[id_przedmiotu, waga], ...]  (waga względna: im większa, tym częściej wypada)
-//   coins = null (skrzynie ze sklepu nie dają monet; można wpisać [min, max], jeśli kiedyś będą dawać)
-//   itemChance = szansa na przedmiot z puli w każdej z trzech skrzyń do wyboru (1.0 = zawsze)
-//   tier = poziom wyglądu/komentarza Boba (0-6), nie wpływa na pulę
-// Chcesz dodać przedmiot do skrzyni? Dopisz go do pool. Chcesz inne szanse? Zmień wagi.
+// Sklep ma 3 skrzynie. Każda ma WIDOCZNĄ listę poziomów rzadkości, które mogą w niej wypaść:
+//   tiers = [[poziom, waga], ...]  poziom 0-6 (0 Pospolita ... 6 Void); waga względna = szansa poziomu
+//   Konkretny przedmiot jest losowany wśród przedmiotów wylosowanego poziomu (wagi `weight` w ITEMS).
+//   Skrzynie mogą się na siebie nakładać (ten sam poziom w dwóch skrzyniach), ale niska nie dostaje wysokich.
+//   coins = null (skrzynie ze sklepu nie dają monet), itemChance 1.0 = zawsze wypada przedmiot
+//   tier (pojedynczy) = tylko wygląd/komentarz Boba
 const CHESTS = {
   chest_braz: {
-    id: 'chest_braz', name: 'Skrzynia Brązowa', emoji: '🟤', tier: 1, price: 270,
+    id: 'chest_braz', name: 'Skrzynia Brązowa', emoji: '🟤', tier: 1, price: 320,
     coins: null, itemChance: 1.0,
-    pool: [['teczka', 20], ['darmowy_los', 20], ['koniczynka', 15], ['latarka', 12], ['budzik', 10], ['aktowka', 13], ['mala_polisa', 10]],
+    tiers: [[0, 50], [1, 40], [2, 10]],
   },
   chest_srebrna: {
-    id: 'chest_srebrna', name: 'Skrzynia Srebrna', emoji: '⚪', tier: 3, price: 2000,
+    id: 'chest_srebrna', name: 'Skrzynia Srebrna', emoji: '⚪', tier: 3, price: 2300,
     coins: null, itemChance: 1.0,
-    pool: [['klucz', 16], ['pakiet_losow', 16], ['walizka', 22], ['polisa_boba', 14], ['wielka_polisa', 12], ['sejf', 20]],
+    tiers: [[1, 15], [2, 45], [3, 35], [4, 5]],
   },
   chest_zlota: {
-    id: 'chest_zlota', name: 'Skrzynia Złota', emoji: '🟡', tier: 5, price: 20000,
+    id: 'chest_zlota', name: 'Skrzynia Złota', emoji: '🟡', tier: 5, price: 21000,
     coins: null, itemChance: 1.0,
-    pool: [['koniczyna', 14], ['podkowa', 14], ['korona', 14], ['moneta_void', 10], ['skarbiec', 24], ['kufer', 16], ['czarna_skrzynka', 8]],
+    tiers: [[3, 10], [4, 50], [5, 30], [6, 10]],
   },
 
   // ---- STARE SKRZYNIE (legacy): już niedostępne w sklepie, ale kto je ma w ekwipunku, nadal je otworzy.
@@ -277,22 +277,35 @@ function dropDailyItem(owned = new Set()) {
   return pickItemFromTier(tier, owned) ?? pickItemFromTier(0, owned);
 }
 
-// Losowanie przedmiotu z puli konkretnej skrzyni (unikalne, które już masz, są pomijane)
-function pickFromPool(chest, owned = new Set()) {
-  const entries = chest.pool
-    .map(([id, weight]) => ({ id, weight, def: ITEMS[id] }))
-    .filter((e) => e.def && e.weight > 0 && !(e.def.unique && owned.has(e.id)));
-  const picked = weightedPick(entries);
-  return picked ? picked.def : null;
+// Losowanie przedmiotu ze skrzyni: najpierw poziom (wg wag skrzyni), potem przedmiot z tego poziomu.
+// Unikalne, które już masz, są pomijane; gdy poziom się wyczerpie, losujemy z pozostałych poziomów skrzyni.
+function pickFromTiers(chest, owned = new Set()) {
+  const entries = chest.tiers.map(([tier, weight]) => ({ tier, weight }));
+  const first = weightedPick(entries);
+  const ordered = first ? [first, ...entries.filter((e) => e !== first)] : entries;
+  for (const e of ordered) {
+    const item = pickItemFromTier(e.tier, owned);
+    if (item) return item;
+  }
+  return null;
 }
 
-// Procentowe szanse przedmiotów w puli (do wyświetlania w sklepie), od najczęstszych
-function poolOdds(chest) {
-  const total = chest.pool.reduce((s, [, w]) => s + w, 0);
-  return chest.pool
-    .map(([id, w]) => ({ def: ITEMS[id], pct: (w / total) * 100 }))
-    .filter((e) => e.def)
-    .sort((a, b) => b.pct - a.pct);
+// Procentowe szanse poziomów w skrzyni (do wyświetlania w sklepie), od najniższego poziomu
+function tierOdds(chest) {
+  const total = chest.tiers.reduce((s, [, w]) => s + w, 0);
+  return chest.tiers.map(([tier, w]) => ({ tier, pct: (w / total) * 100 })).sort((a, b) => a.tier - b.tier);
+}
+
+// Średnia wartość przedmiotu ze skrzyni (do ustalania ceny: sklep ma zwracać ok. 75%)
+function expectedItemValue(chest) {
+  const total = chest.tiers.reduce((s, [, w]) => s + w, 0);
+  let ev = 0;
+  for (const [tier, w] of chest.tiers) {
+    const pool = Object.values(ITEMS).filter((i) => i.tier === tier && i.weight > 0);
+    const tw = pool.reduce((x, i) => x + i.weight, 0);
+    if (tw > 0) ev += (w / total) * (pool.reduce((x, i) => x + i.weight * i.value, 0) / tw);
+  }
+  return ev;
 }
 
 // Zawartość jednej skrzyni (kupionej w sklepie)
@@ -304,8 +317,8 @@ function rollChestContents(chest, luck = 0, owned = new Set()) {
   let item = null;
   if (chance(p)) {
     // Szczęście: z szansą równą szczęściu losujemy dwa razy i bierzemy cenniejszy przedmiot
-    item = chest.pool
-      ? luckyPick(() => pickFromPool(chest, owned), (it) => (it ? it.value : 0), luck)
+    item = chest.tiers
+      ? luckyPick(() => pickFromTiers(chest, owned), (it) => (it ? it.value : 0), luck)
       : dropItem(chest.tier, owned);
   }
   return { coins, item };
@@ -340,5 +353,5 @@ module.exports = {
   TIER_NAMES, TIER_ICONS, ITEMS, CHESTS,
   LUCK_CAP, LUCK_COMBO_BONUS, DAILY_ITEM_CHANCE, DAILY_ITEM_CHANCE_BUDZIK,
   chance, isChest, getDef, computeLuck, luckyPick, dropItem, dropDailyItem,
-  rollChestContents, pickFromPool, poolOdds, rollMoneyOnce, rollMoney, moneyScore, warsawDate,
+  rollChestContents, pickFromTiers, tierOdds, expectedItemValue, rollMoneyOnce, rollMoney, moneyScore, warsawDate,
 };

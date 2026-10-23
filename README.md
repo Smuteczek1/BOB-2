@@ -187,9 +187,9 @@ Poziomy i drabinka ról na razie działają jak dotąd, równolegle do monet.
 
 ### Jak działa sklep i ekwipunek
 
-**Skrzynie:** w `/sklep` są **3 skrzynie**: 🟤 Brązowa, ⚪ Srebrna i 🟡 Złota. Każda ma własną, **widoczną w sklepie pulę przedmiotów** (z procentowymi szansami), **100% szansy na przedmiot** (skrzynie ze sklepu nie dają monet). Przedmioty **nie są na sprzedaż**: wypadają ze skrzyń (kupionych i z 20% szansą w dziennej) i z innych przedmiotów (bonusy). Skrzynię otwierasz w `/ekwipunek`: wybierasz jedną z trzech (publicznie na kanale), a zużywa się dopiero po wyborze. Każda kupiona skrzynia zwraca średnio ok. 75% swojej ceny, więc sklep działa jak zlew monet. Stare skrzynie (Pospolita ... Void i Skrytka Boba) są oznaczone `legacy`: nie ma ich w sklepie, ale kto je już ma, nadal je otworzy.
+**Skrzynie:** w `/sklep` są **3 skrzynie**: 🟤 Brązowa, ⚪ Srebrna i 🟡 Złota. Każda ma własną, **widoczną w sklepie listę poziomów rzadkości** (z procentowymi szansami; skrzynie lekko się nakładają, ale Brązowa nie dostaje wysokich poziomów), **100% szansy na przedmiot** (skrzynie ze sklepu nie dają monet). Przedmioty **nie są na sprzedaż**: wypadają ze skrzyń (kupionych i z 20% szansą w dziennej) i z innych przedmiotów (bonusy). Skrzynię otwierasz w `/ekwipunek`: wybierasz jedną z trzech (publicznie na kanale), a zużywa się dopiero po wyborze. Każda kupiona skrzynia zwraca średnio ok. 75% swojej ceny, więc sklep działa jak zlew monet. Stare skrzynie (Pospolita ... Void i Skrytka Boba) są oznaczone `legacy`: nie ma ich w sklepie, ale kto je już ma, nadal je otworzy.
 
-**Zmiana zawartości skrzyni:** w `utils/items.js`, obiekt `CHESTS`, pole `pool` (`[id_przedmiotu, waga]`). Większa waga = częściej wypada; sklep sam przelicza procenty.
+**Zmiana zawartości skrzyni:** w `utils/items.js`, obiekt `CHESTS`, pole `tiers` (`[poziom, waga]`, poziomy 0-6). Większa waga = częściej wypada ten poziom; sklep sam przelicza procenty. Konkretny przedmiot jest losowany wśród przedmiotów danego poziomu (pole `weight` w `ITEMS`). Do wyliczenia ceny na ok. 75% zwrotu służy `expectedItemValue(chest)`.
 
 **Katalog w jednym pliku:** `utils/items.js` zawiera wszystkie przedmioty, skrzynie, ceny, szanse, wagi i bonusy.
 Dla przedmiotów niepieniężnych pole `value` to tylko szacunek (do liczenia cen i oceny "najgorszej skrzyni").
