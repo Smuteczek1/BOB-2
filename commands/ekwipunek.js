@@ -5,8 +5,9 @@ const {
 const inv = require('../utils/inventory');
 const items = require('../utils/items');
 const { useItem } = require('../utils/itemUse');
-const { runChestGame, TIER_QUIPS } = require('../utils/chestGame');
-const { DAILY_TIERS } = require('../utils/economy');
+const { TIER_QUIPS } = require('../utils/chestGame');
+const { runOpening } = require('../utils/chestOpen');
+const { DAILY_TIERS, formatCoins } = require('../utils/economy');
 
 const PICK_TIME_MS = Number(process.env.CHEST_PICK_TIME_MS ?? 60_000);
 const OPEN_DELAY_MS = Number(process.env.CHEST_FRAME_DELAY_MS ?? 2000);
@@ -22,6 +23,10 @@ const PAGE_ID = 'inv_page';
 const ROWS_PER_PAGE = 7;
 
 const KIND_LABEL = { consumable: 'jednorazowy', permanent: 'stały', collectible: 'kolekcjonerski' };
+
+// Przedmioty "pieniężne" (Teczka ... Czarna Skrzynka: nic / suma / mandat) otwierają się jak skrzynie
+const isMoneyItem = (def) => def?.use?.type === 'money';
+const GAIN_COLOR = 0x2ecc71; // kolor wyniku "wygrana" zwracany przez useItem
 
 const minutesLeft = (ms) => Math.max(1, Math.ceil((ms - Date.now()) / 60000));
 const nameOf = (user) => user.displayName ?? user.username;
@@ -49,7 +54,7 @@ function collectEntries(inventory) {
 
 function entryText(e) {
   if (e.type === 'chest') {
-    return `${e.def.emoji} **${e.def.name}** ×${e.qty}\n-# wybierzesz jedną z trzech skrzyń (publicznie na kanale)`;
+    return `${e.def.emoji} **${e.def.name}** ×${e.qty}\n-# otwiera się publicznie na kanale`;
   }
   const d = e.def;
   return `${items.TIER_ICONS[d.tier]} ${d.emoji} **${d.name}** ×${e.qty}\n-# ${KIND_LABEL[d.kind]} · ${d.desc.slice(0, 220)}`;
@@ -97,7 +102,9 @@ async function buildView(guildId, user, { banner = null, page = 0, disabled = fa
     for (const e of slice) {
       const button = e.type === 'chest'
         ? new ButtonBuilder().setCustomId(`${OPEN_PREFIX}${e.def.id}`).setStyle(ButtonStyle.Primary).setLabel('Otwórz').setEmoji('📦')
-        : new ButtonBuilder().setCustomId(`${USE_PREFIX}${e.def.id}`).setStyle(ButtonStyle.Success).setLabel('Użyj').setEmoji('✨');
+        : isMoneyItem(e.def)
+          ? new ButtonBuilder().setCustomId(`${USE_PREFIX}${e.def.id}`).setStyle(ButtonStyle.Primary).setLabel('Otwórz').setEmoji('📦')
+          : new ButtonBuilder().setCustomId(`${USE_PREFIX}${e.def.id}`).setStyle(ButtonStyle.Success).setLabel('Użyj').setEmoji('✨');
       container.addSectionComponents(
         new SectionBuilder()
           .addTextDisplayComponents(new TextDisplayBuilder().setContent(entryText(e)))
@@ -168,8 +175,13 @@ module.exports = {
           const chest = items.CHESTS[i.customId.slice(OPEN_PREFIX.length)];
           banner = chest ? await openChest(interaction, guildId, user, chest) : '❌ **Nie ma takiej skrzyni**';
         } else if (i.customId.startsWith(USE_PREFIX)) {
-          const res = await useItem(guildId, user.id, i.customId.slice(USE_PREFIX.length));
-          banner = res.ok ? `**${res.title}**\n${res.lines.join('\n')}` : `❌ **Nie udało się**\n${res.message}`;
+          const itemId = i.customId.slice(USE_PREFIX.length);
+          if (isMoneyItem(items.ITEMS[itemId])) {
+            banner = await openMoneyItem(interaction, guildId, user, items.ITEMS[itemId]);
+          } else {
+            const res = await useItem(guildId, user.id, itemId);
+            banner = res.ok ? `**${res.title}**\n${res.lines.join('\n')}` : `❌ **Nie udało się**\n${res.message}`;
+          }
         }
 
         await interaction.editReply(await render({ banner }));
@@ -188,39 +200,84 @@ module.exports = {
   },
 };
 
-// Otwarcie kupionej skrzyni: publiczna gra "trzy skrzynie" na kanale. Zwraca tekst banera.
+const sendToChannel = (interaction) => (payload) => interaction.channel.send(payload);
+const CHANNEL_ERROR = '❌ **Nie mogę wysłać wiadomości na tym kanale**\nSprawdź uprawnienia bota. Nic nie zostało zużyte.';
+const doneBanner = (emoji, name, res) => (res.ok
+  ? `${emoji} **Otwarto: ${name}**\nWynik jest na kanale.`
+  : `❌ **Nie udało się**\n${res.message}`);
+
+// Otwarcie kupionej skrzyni: "Otwieranie: <nazwa>", po chwili publicznie na kanale pokazuje się zawartość (bez wyboru).
+// Zwraca tekst banera.
 async function openChest(interaction, guildId, user, chest) {
   const have = (await inv.getInventory(guildId, user.id)).find((r) => r.itemId === chest.id);
   if (!have) return '❌ **Nie masz już tej skrzyni**';
 
   const [luck, owned] = await Promise.all([inv.getLuck(guildId, user.id), inv.getOwnedUnique(guildId, user.id)]);
-  const color = DAILY_TIERS[chest.tier].color;
-  const chests = [0, 1, 2].map(() => {
-    const r = items.rollChestContents(chest, luck, owned);
-    return { coins: r.coins, item: r.item, score: r.coins + (r.item ? r.item.value : 0), label: '', color };
-  });
+  const rolled = items.rollChestContents(chest, luck, owned); // { coins, item }
 
+  let res;
   try {
-    await runChestGame({
-      send: (payload) => interaction.channel.send(payload),
+    res = await runOpening({
+      send: sendToChannel(interaction),
       user,
-      chests,
-      modifier: null,
-      luck,
-      title: `${chest.emoji} ${chest.name}`,
-      pickTimeMs: PICK_TIME_MS,
+      emoji: chest.emoji,
+      name: chest.name,
       openDelayMs: OPEN_DELAY_MS,
-      quip: (c) => TIER_QUIPS[c.item ? c.item.tier : chest.tier] ?? '', // komentarz zależy od tego, co wypadło
-      settle: async (selected) => {
-        const c = chests[selected];
-        const res = await inv.settleChestOpen(guildId, user.id, chest.id, c.coins, c.item ? [c.item.id] : []);
-        if (!res.ok) return { ok: false, message: '❌ Tej skrzyni już nie ma w Twoim ekwipunku.' };
-        return { ok: true, balance: res.balance, granted: res.granted };
+      settle: async () => {
+        const s = await inv.settleChestOpen(guildId, user.id, chest.id, rolled.coins, rolled.item ? [rolled.item.id] : []);
+        if (!s.ok) return { ok: false, message: '❌ Tej skrzyni już nie ma w Twoim ekwipunku.' };
+
+        const lines = [];
+        if (rolled.coins > 0) lines.push(`Zyskujesz: ${formatCoins(rolled.coins)}`);
+        if (rolled.item) {
+          lines.push(s.granted.includes(rolled.item.id)
+            ? `🎁 Do ekwipunku: ${rolled.item.emoji} **${rolled.item.name}**`
+            : `ℹ️ ${rolled.item.name}: już to masz (stały przedmiot, pominięty).`);
+        }
+        if (!rolled.coins && !rolled.item) lines.push('W środku pusto.');
+        if (rolled.coins > 0) lines.push(`Saldo: ${formatCoins(s.balance)}`);
+
+        return {
+          ok: true,
+          title: `🎁 Otwarto: ${chest.name}`,
+          color: DAILY_TIERS[chest.tier].color,
+          lines,
+          quip: TIER_QUIPS[rolled.item ? rolled.item.tier : chest.tier] ?? '', // komentarz zależy od tego, co wypadło
+        };
       },
     });
   } catch (err) {
     console.error('Nie udało się wysłać skrzyni na kanał:', err.message);
-    return '❌ **Nie mogę wysłać wiadomości na tym kanale**\nSprawdź uprawnienia bota. Skrzynia nie została zużyta.';
+    return CHANNEL_ERROR;
   }
-  return `${chest.emoji} **Skrzynie czekają na kanale**\nWybierz jedną z trzech w publicznej wiadomości. Skrzynia zużyje się dopiero po wyborze.`;
+  return doneBanner(chest.emoji, chest.name, res);
+}
+
+// Przedmiot "pieniężny" (np. Kufer Boba): to samo otwieranie co skrzynia; wynik (nic / suma / mandat) liczy useItem.
+async function openMoneyItem(interaction, guildId, user, def) {
+  let res;
+  try {
+    res = await runOpening({
+      send: sendToChannel(interaction),
+      user,
+      emoji: def.emoji,
+      name: def.name,
+      openDelayMs: OPEN_DELAY_MS,
+      settle: async () => {
+        const used = await useItem(guildId, user.id, def.id);
+        if (!used.ok) return { ok: false, message: `❌ ${used.message}` };
+        return {
+          ok: true,
+          title: `🎁 Otwarto: ${def.name}`,
+          color: used.color,
+          lines: used.lines,
+          quip: used.color === GAIN_COLOR ? TIER_QUIPS[def.tier] ?? '' : '', // komentarz Boba tylko przy wygranej
+        };
+      },
+    });
+  } catch (err) {
+    console.error('Nie udało się wysłać wiadomości na kanał:', err.message);
+    return CHANNEL_ERROR;
+  }
+  return doneBanner(def.emoji, def.name, res);
 }
