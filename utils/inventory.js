@@ -76,7 +76,7 @@ async function removeItem(client, guildId, userId, itemId, qty = 1) {
 // Pobranie monet, wpis w dzienniku i dodanie skrzyni do ekwipunku w jednej transakcji.
 async function buyChest(guildId, userId, chestId) {
   const chest = items.CHESTS[chestId];
-  if (!chest) throw new Refused('Nie ma takiej skrzyni.');
+  if (!chest || chest.legacy) throw new Refused('Nie ma takiej skrzyni.');
 
   return db.withTransaction(async (c) => {
     const res = await c.query(`
