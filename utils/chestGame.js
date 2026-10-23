@@ -81,8 +81,8 @@ async function runChestGame(opts) {
         (modifier === 'latarka' ? '\n🔦 **Latarka:** jedna skrzynia odpadła, zobacz niżej, co w niej było.' : '') +
         (modifier === 'klucz' ? '\n🗝️ **Zapasowy klucz:** po wyborze otworzysz też lepszą z pozostałych.' : ''),
       ),
-      small(),
     );
+    container.addSeparatorComponents(small());
 
     chests.forEach((c, i) => {
       const gone = i === removed;
