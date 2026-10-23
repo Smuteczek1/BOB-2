@@ -1,12 +1,15 @@
 const {
-  EmbedBuilder,
-  ActionRowBuilder,
+  ContainerBuilder,
+  SectionBuilder,
+  TextDisplayBuilder,
+  SeparatorBuilder,
+  SeparatorSpacingSize,
   ButtonBuilder,
   ButtonStyle,
   ComponentType,
   MessageFlags,
 } = require('discord.js');
-const { formatCoins, CURRENCY } = require('./economy');
+const { formatCoins } = require('./economy');
 
 // Komentarz Boba do każdego poziomu (0 = Pospolita ... 6 = Void)
 const TIER_QUIPS = [
@@ -23,6 +26,17 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const noPings = { parse: [] };
 const nameOf = (user) => user.displayName ?? user.username;
 
+// Wszystkie wiadomości gry to Components V2 (jak /sklep i /ekwipunek): kontener z tekstami i sekcjami z przyciskami.
+// W V2 nie ma pól content/embeds, więc wzmianka o graczu jest zwykłym tekstem (allowedMentions nic nie pinguje).
+const V2 = MessageFlags.IsComponentsV2;
+const small = () => new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small);
+const text = (content) => new TextDisplayBuilder().setContent(content);
+const payloadOf = (container) => ({ components: [container], flags: V2, allowedMentions: noPings });
+
+// Krótka wiadomość tekstowa (błędy, brak wyboru): też w V2, bo w wiadomości V2 nie wolno wrócić do content/embeds
+const messagePayload = (content, color = 0x95a5a6) =>
+  payloadOf(new ContainerBuilder().setAccentColor(color).addTextDisplayComponents(text(content)));
+
 // Jedna skrzynia: { coins, item (obiekt z katalogu albo null), score, label, color }
 function describe(c) {
   const parts = [];
@@ -30,42 +44,6 @@ function describe(c) {
   if (c.item) parts.push(`${c.item.emoji} **${c.item.name}**`);
   if (parts.length === 0) parts.push('pusto');
   return `${c.label ? `${c.label}: ` : ''}${parts.join(' + ')}`;
-}
-
-function shortLabel(c) {
-  const coins = c.coins > 0 ? c.coins.toLocaleString('pl-PL') : '';
-  const item = c.item ? c.item.emoji : '';
-  return `${coins}${coins && item ? ' ' : ''}${item}` || 'pusto';
-}
-
-function pickRow(chests, { disabledAll = false, selected = null, removed = null } = {}) {
-  const row = new ActionRowBuilder();
-  chests.forEach((c, i) => {
-    const gone = i === removed;
-    row.addComponents(
-      new ButtonBuilder()
-        .setCustomId(`chest_${i}`)
-        .setLabel(gone ? `🔒 ${shortLabel(c)}` : `Skrzynia ${i + 1}`)
-        .setEmoji(gone ? '🔦' : '📦')
-        .setStyle(selected === i ? ButtonStyle.Success : gone ? ButtonStyle.Secondary : ButtonStyle.Primary)
-        .setDisabled(disabledAll || gone),
-    );
-  });
-  return row;
-}
-
-function revealRow(chests, selected, extra) {
-  const row = new ActionRowBuilder();
-  chests.forEach((c, i) => {
-    row.addComponents(
-      new ButtonBuilder()
-        .setCustomId(`chest_${i}`)
-        .setLabel(shortLabel(c))
-        .setStyle(i === selected ? ButtonStyle.Success : i === extra ? ButtonStyle.Primary : ButtonStyle.Secondary)
-        .setDisabled(true),
-    );
-  });
-  return row;
 }
 
 /**
@@ -92,24 +70,43 @@ async function runChestGame(opts) {
     removed = chests.reduce((worst, c, i) => (c.score < chests[worst].score ? i : worst), 0);
   }
 
-  const luckText = luck > 0 ? ` • 🍀 szczęście +${luck}%` : '';
-  const pickEmbed = new EmbedBuilder()
-    .setColor(0x7a5420)
-    .setTitle(`${title}: wybierz jedną z trzech!`)
-    .setDescription(
-      '📦 Bob stawia na ladzie **trzy skrzynie** i patrzy spod oka.\nW każdej jest inna zawartość. Którą otwierasz?\n' +
-      (modifier === 'latarka' ? `\n🔦 **Latarka:** skrzynia ${removed + 1} odpadła. W środku było: ${describe(chests[removed])}\n` : '') +
-      (modifier === 'klucz' ? '\n🗝️ **Zapasowy klucz:** po wyborze otworzysz też lepszą z pozostałych.\n' : '') +
-      '\n# ⬛ ⬛ ⬛',
-    )
-    .setFooter({ text: `Etap 1/3 • wybiera: ${nameOf(user)} • masz ${Math.round(pickTimeMs / 1000)} s${luckText}` });
+  // ---------- Etap 1: wybór ----------
+  const buildPick = () => {
+    const luckText = luck > 0 ? ` • 🍀 szczęście +${luck}%` : '';
+    const container = new ContainerBuilder().setAccentColor(0x7a5420).addTextDisplayComponents(
+      text(`${user} stoi przed trzema skrzyniami!`),
+      text(`## ${title}: wybierz jedną z trzech!`),
+      text(
+        '-# Bob stawia na ladzie **trzy skrzynie** i patrzy spod oka. W każdej jest inna zawartość.' +
+        (modifier === 'latarka' ? '\n🔦 **Latarka:** jedna skrzynia odpadła, zobacz niżej, co w niej było.' : '') +
+        (modifier === 'klucz' ? '\n🗝️ **Zapasowy klucz:** po wyborze otworzysz też lepszą z pozostałych.' : ''),
+      ),
+      small(),
+    );
 
-  const message = await send({
-    content: `${user} stoi przed trzema skrzyniami!`,
-    embeds: [pickEmbed],
-    components: [pickRow(chests, { removed })],
-    allowedMentions: noPings,
-  });
+    chests.forEach((c, i) => {
+      const gone = i === removed;
+      const button = new ButtonBuilder()
+        .setCustomId(`chest_${i}`)
+        .setStyle(gone ? ButtonStyle.Secondary : ButtonStyle.Primary)
+        .setLabel(gone ? 'Odpadła' : 'Otwórz')
+        .setEmoji(gone ? '🔦' : '📦')
+        .setDisabled(gone);
+      container.addSectionComponents(
+        new SectionBuilder()
+          .addTextDisplayComponents(text(gone
+            ? `### ~~Skrzynia ${i + 1}~~\n-# było w niej: ${describe(c)}`
+            : `### 📦 Skrzynia ${i + 1}\n-# zamknięta na kłódkę`))
+          .setButtonAccessory(button),
+      );
+    });
+
+    container.addSeparatorComponents(small());
+    container.addTextDisplayComponents(text(`-# wybiera: ${nameOf(user)} • masz ${Math.round(pickTimeMs / 1000)} s${luckText}`));
+    return payloadOf(container);
+  };
+
+  const message = await send(buildPick());
 
   const collector = message.createMessageComponentCollector({ componentType: ComponentType.Button, time: pickTimeMs });
   let picked = false; // ustawiane synchronicznie: szybkie podwójne kliknięcie nie otworzy dwóch skrzyń
@@ -145,78 +142,72 @@ async function runChestGame(opts) {
       extra = rest.reduce((best, cur) => (cur.c.score > best.c.score ? cur : best)).i;
     }
 
-    // Etap 2/3
-    await click.update({
-      content: `${user} otwiera skrzynię **${selected + 1}**!`,
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0xd4af37)
-          .setTitle(title)
-          .setDescription(`🔒 Skrzynia **${selected + 1}**: zamek trzeszczy, wieko drży, a spod niego przebija się światło... ✨\n\n# ${[0, 1, 2].map((i) => (i === selected ? '✨' : '⬛')).join(' ')}`)
-          .setFooter({ text: `Etap 2/3 • otwiera: ${nameOf(user)}` }),
-      ],
-      components: [pickRow(chests, { disabledAll: true, selected, removed })],
-      allowedMentions: noPings,
-    }).catch((err) => console.error('Skrzynia: etap 2 nie powiódł się:', err.message));
+    // ---------- Etap 2: otwieranie ----------
+    const opening = new ContainerBuilder().setAccentColor(0xd4af37).addTextDisplayComponents(
+      text(`${user} otwiera skrzynię **${selected + 1}**!`),
+      text(`## ${title}`),
+      text(`🔒 Skrzynia **${selected + 1}**: zamek trzeszczy, wieko drży, a spod niego przebija się światło... ✨`),
+      text(`# ${[0, 1, 2].map((i) => (i === selected ? '✨' : '⬛')).join(' ')}`),
+    );
+    await click.update(payloadOf(opening))
+      .catch((err) => console.error('Skrzynia: etap 2 nie powiódł się:', err.message));
 
     let result;
     try {
       result = await settle(selected, extra);
     } catch (err) {
       console.error('Skrzynia: błąd zapisu:', err);
-      await edit({ content: '❌ Coś poszło nie tak przy zapisie. Nic nie zostało pobrane ani wypłacone, spróbuj za chwilę ponownie.', embeds: [], components: [], allowedMentions: noPings });
+      await edit(messagePayload('❌ Coś poszło nie tak przy zapisie. Nic nie zostało pobrane ani wypłacone, spróbuj za chwilę ponownie.', 0xe74c3c));
       return;
     }
     if (!result.ok) {
-      await edit({ content: result.message, embeds: [], components: [], allowedMentions: noPings });
+      await edit(messagePayload(result.message, 0xe74c3c));
       return;
     }
 
     await sleep(openDelayMs);
 
-    // Etap 3/3: odsłonięcie
+    // ---------- Etap 3: odsłonięcie ----------
     const chosen = chests[selected];
     const totalCoins = chosen.coins + (extra !== null ? chests[extra].coins : 0);
     const lines = chests.map((c, i) => {
       const mark = i === selected ? '▶️' : i === extra ? '🗝️' : i === removed ? '🔦' : '▫️';
-      return `${mark} Skrzynia ${i + 1}: ${describe(c)}${i === removed ? ' *(odpadła)*' : ''}`;
+      const name = i === selected ? `**Skrzynia ${i + 1}:**` : `Skrzynia ${i + 1}:`; // pogrubiamy tylko nazwę, bo przedmiot ma już własne pogrubienie
+      return `${mark} ${name} ${describe(c)}${i === removed ? ' *(odpadła)*' : ''}`;
     });
 
     const gotItems = (result.granted ?? []);
     const skipped = [chosen.item, extra !== null ? chests[extra].item : null].filter((it) => it && !gotItems.includes(it.id));
     const bestOther = Math.max(...chests.filter((_, i) => i !== selected && i !== removed).map((c) => c.score));
-    const verdict = extra !== null ? '' : chosen.score >= bestOther ? '\n🏆 Wybrałeś/aś najlepszą ze skrzyń do wyboru!' : '\n😬 W innej skrzyni było więcej.';
+    const verdict = extra !== null ? null : chosen.score >= bestOther ? '🏆 Wybrałeś/aś najlepszą ze skrzyń do wyboru!' : '😬 W innej skrzyni było więcej.';
 
-    const reveal = new EmbedBuilder()
-      .setColor(chosen.color ?? 0xd4af37)
-      .setTitle('🎁 Skrzynia otwarta!')
-      .setDescription(
-        `**KLIK!**\n${lines.join('\n')}${verdict}\n\n` +
-        `${CURRENCY.emoji} Zyskujesz: ${totalCoins > 0 ? formatCoins(totalCoins) : 'same przedmioty'}\n` +
-        (gotItems.length ? `🎁 Do ekwipunku: ${gotItems.map((id) => { const it = chests.map((c) => c.item).find((x) => x?.id === id); return it ? `${it.emoji} **${it.name}**` : id; }).join(', ')}\n` : '') +
-        (skipped.length ? `ℹ️ ${skipped.map((s) => s.name).join(', ')}: już to masz (stały przedmiot, pominięty).\n` : '') +
-        `Saldo: ${formatCoins(result.balance)}\n\n` +
-        `🥃 *Bob: ${quip ? quip(chosen) : 'Hm. Niezłe.'}*`,
-      )
-      .setFooter({ text: `Etap 3/3 • otworzył(a): ${nameOf(user)}` })
-      .setTimestamp();
+    const gains = [];
+    if (totalCoins > 0) gains.push(`Zyskujesz: ${formatCoins(totalCoins)}`);
+    if (gotItems.length) {
+      gains.push(`🎁 Do ekwipunku: ${gotItems.map((id) => { const it = chests.map((c) => c.item).find((x) => x?.id === id); return it ? `${it.emoji} **${it.name}**` : id; }).join(', ')}`);
+    }
+    if (skipped.length) gains.push(`ℹ️ ${skipped.map((x) => x.name).join(', ')}: już to masz (stały przedmiot, pominięty).`);
+    // Saldo pokazujemy tylko wtedy, gdy się zmieniło (skrzynie ze sklepu nie dają monet)
+    if (totalCoins > 0) gains.push(`Saldo: ${formatCoins(result.balance)}`);
 
-    await edit({
-      content: `${user}`,
-      embeds: [reveal],
-      components: [revealRow(chests, selected, extra)],
-      allowedMentions: noPings,
-    });
+    const reveal = new ContainerBuilder().setAccentColor(chosen.color ?? 0xd4af37).addTextDisplayComponents(
+      text(`${user}`),
+      text('## 🎁 Skrzynia otwarta!'),
+      text(lines.join('\n')),
+    );
+    if (verdict) reveal.addTextDisplayComponents(text(verdict));
+    reveal.addSeparatorComponents(small());
+    if (gains.length) reveal.addTextDisplayComponents(text(gains.join('\n')));
+    reveal.addTextDisplayComponents(text(`🥃 *Bob: ${quip ? quip(chosen) : 'Hm. Niezłe.'}*`));
+    reveal.addSeparatorComponents(small());
+    reveal.addTextDisplayComponents(text(`-# otworzył(a): ${nameOf(user)} • <t:${Math.floor(Date.now() / 1000)}:t>`));
+
+    await edit(payloadOf(reveal));
   });
 
   collector.on('end', async (_collected, reason) => {
     if (reason === 'picked') return;
-    await edit({
-      content: '⌛ Skrzynie zniknęły, bo nie wybrałeś/aś żadnej. Nic nie zostało zużyte, spróbuj ponownie.',
-      embeds: [],
-      components: [],
-      allowedMentions: noPings,
-    });
+    await edit(messagePayload('⌛ Skrzynie zniknęły, bo nie wybrałeś/aś żadnej. Nic nie zostało zużyte, spróbuj ponownie.'));
   });
 }
 

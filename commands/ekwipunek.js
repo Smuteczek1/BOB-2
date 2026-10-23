@@ -210,7 +210,7 @@ async function openChest(interaction, guildId, user, chest) {
       title: `${chest.emoji} ${chest.name}`,
       pickTimeMs: PICK_TIME_MS,
       openDelayMs: OPEN_DELAY_MS,
-      quip: () => TIER_QUIPS[chest.tier] ?? '',
+      quip: (c) => TIER_QUIPS[c.item ? c.item.tier : chest.tier] ?? '', // komentarz zależy od tego, co wypadło
       settle: async (selected) => {
         const c = chests[selected];
         const res = await inv.settleChestOpen(guildId, user.id, chest.id, c.coins, c.item ? [c.item.id] : []);
