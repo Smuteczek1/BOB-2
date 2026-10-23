@@ -28,6 +28,9 @@ const REASON_LABELS = {
   casino_moneta: 'Kasyno: orzeł/reszka',
   lotto_ticket: 'Lotto: los',
   lotto_win: 'Lotto: wygrana',
+  chest_open: 'Otwarcie skrzyni',
+  mandat: 'Mandat',
+  reset: 'Reset salda',
 };
 
 // ============================================================
@@ -67,7 +70,14 @@ function rollDailyReward() {
 }
 
 function reasonLabel(reason) {
-  return REASON_LABELS[reason] ?? reason;
+  if (REASON_LABELS[reason]) return REASON_LABELS[reason];
+  // Powody tworzone dynamicznie przez sklep i przedmioty (wczytywane leniwie, żeby uniknąć pętli importów)
+  try {
+    const { ITEMS, CHESTS } = require('./items');
+    if (reason.startsWith('shop_') && CHESTS[reason.slice(5)]) return `Sklep: ${CHESTS[reason.slice(5)].name}`;
+    if (reason.startsWith('item_') && ITEMS[reason.slice(5)]) return `Przedmiot: ${ITEMS[reason.slice(5)].name}`;
+  } catch { /* brak katalogu: pokaż surowy powód */ }
+  return reason;
 }
 
 module.exports = {

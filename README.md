@@ -91,9 +91,11 @@ npm start
 | `/setup-poziomy [kategoria] [nazwa_kanalu]` | Tworzy kanał ogłaszający kamienie milowe poziomów | Zarządzanie serwerem |
 | `/poziom [uzytkownik]` | Pokazuje Twój (lub czyjś) aktualny poziom i XP | Wszyscy |
 | `/eksport-poziomow` | Wysyła plik CSV z XP i poziomami wszystkich (kopia zapasowa) | Administrator |
-| `/reset co:[monety/exp/wszystko] [osoba]` | Zeruje monety i/lub EXP jednej osoby albo całego serwera (z podglądem, potwierdzeniem i kopią usuniętych danych) | Administrator |
+| `/reset co:[monety/exp/ekwipunek/wszystko] [osoba]` | Zeruje monety i/lub EXP jednej osoby albo całego serwera (z podglądem, potwierdzeniem i kopią usuniętych danych) | Administrator |
 | `/portfel [uzytkownik]` | Pokazuje saldo monet, zarobione łącznie i (dla Ciebie) ostatnie operacje | Wszyscy |
-| `/nagroda` | Dzienna skrzynia z monetami (reset o północy, czas polski) | Wszyscy |
+| `/nagroda` | Dzienna nagroda: wybierasz jedną z trzech skrzyń (reset o północy, czas polski) | Wszyscy |
+| `/sklep` | Sklep Boba: kup skrzynię (przedmioty wypadają tylko ze skrzyń) | Wszyscy |
+| `/ekwipunek` | Twoje przedmioty i skrzynie; stąd je używasz i otwierasz | Wszyscy |
 | `/cclear kanal ilosc:<liczba/all> [uzytkownik]` | Usuwa wiadomości z bieżącego kanału | Zarządzanie wiadomościami |
 | `/cclear uzytkownik uzytkownik:<user> okres:<...>` | Usuwa wiadomości danego użytkownika ze WSZYSTKICH kanałów, z ostatnich X godzin | Zarządzanie wiadomościami |
 | `/rola-poziom ustaw poziom:<n> rola:<rola>` | Przypisuje rolę do poziomu (0 = od dołączenia) | Zarządzanie rolami |
@@ -182,6 +184,36 @@ ani nie da podwójnej nagrody. Saldo nie może zejść poniżej zera (ograniczen
 `economy_transactions`.
 
 Poziomy i drabinka ról na razie działają jak dotąd, równolegle do monet.
+
+### Jak działa sklep i ekwipunek
+
+**Skrzynie:** w `/sklep` kupujesz skrzynie na 7 poziomach (Pospolita ... Void) oraz Skrytkę Boba (tylko przedmiot).
+Przedmioty **nie są na sprzedaż**: wypadają ze skrzyń (kupionych i z 20% szansą w dziennej) i z innych przedmiotów (bonusy).
+Skrzynię otwierasz w `/ekwipunek`: wybierasz jedną z trzech (publicznie na kanale), a zużywa się dopiero po wyborze.
+Każda kupiona skrzynia zwraca średnio ok. 75% swojej ceny, więc sklep działa jak zlew monet.
+
+**Katalog w jednym pliku:** `utils/items.js` zawiera wszystkie przedmioty, skrzynie, ceny, szanse, wagi i bonusy.
+Dla przedmiotów niepieniężnych pole `value` to tylko szacunek (do liczenia cen i oceny "najgorszej skrzyni").
+
+**Typy przedmiotów:** jednorazowe (`J`), stałe (`S`, tylko Koniczyna i Podkowa, można mieć po jednym) i kolekcjonerskie (`K`).
+
+**Szczęście** (Koniczynka, Koniczyna, Podkowa): z szansą równą szczęściu losujesz dwa razy i bierzesz lepszy wynik.
+Ta sama rodzina się nie sumuje (działa najsilniejsza), różne się sumują, a Koniczyna razem z Podkową dają dodatkowe +2%.
+Górny limit to +15%. Szczęście **nie działa** w kasynie ani w loterii.
+
+**Modyfikatory dziennej skrzyni:** Latarka (najgorsza z trzech odpada) i Zapasowy klucz (otwierasz też lepszą z reszty).
+Jeden modyfikator na odbiór. Budzik Boba pozwala odebrać dzienną skrzynię drugi raz.
+
+**Przedmioty pieniężne** (Teczka ... Czarna Skrzynka): nic, suma albo mandat (10% salda, z limitem; nigdy poniżej zera).
+
+**Polisy** (Mała/Boba/Wielka): włączasz przed grą w kasynie; po przegranej jest szansa na zwrot straty do limitu.
+Zużywają się przy tej jednej grze, a zwrot jest liczony w tej samej transakcji co rozliczenie gry.
+
+**Bezpieczeństwo:** zakup, zużycie przedmiotu, wypłata i wpis w dzienniku zawsze dzieją się w jednej transakcji.
+Jeśli coś się nie uda (limit losów, brak środków, drugi modyfikator), transakcja jest cofana, a przedmiot nie ginie.
+
+**Wytrych** jest w katalogu, ale nie wypada ze skrzyń, dopóki nie będzie napadu (`weight: 0`).
+Kolory nicków dojdą później.
 
 ### Jak działa /reset
 

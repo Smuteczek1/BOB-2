@@ -246,10 +246,19 @@ function outcomeStyle(bet, payout) {
   return { color: 0xe74c3c, head: '❌ Przegrana', quip: pick(BOB_LOSE) };
 }
 
-function resultLines(bet, payout, balance) {
+function insuranceLine(ins) {
+  if (!ins) return '';
+  if (ins.refund > 0) {
+    return `\n🛡️ **${ins.name}** uratowała Ci ${formatCoins(ins.refund)}!` + (ins.bonusTicket ? '\n🎁 **Bonus!** Darmowy los trafił do ekwipunku.' : '');
+  }
+  if (ins.usedOnWin) return `\n🛡️ ${ins.name} nie była potrzebna (wygrana) i została zużyta.`;
+  return `\n🛡️ ${ins.name} nie zadziałała (szansa ${ins.chance}%).`;
+}
+
+function resultLines(bet, payout, balance, insurance = null) {
   const net = payout - bet;
   const netText = net > 0 ? `+${formatCoins(net)}` : net < 0 ? `−${formatCoins(-net)}` : 'bez zmian';
-  return `Stawka: ${formatCoins(bet)}\nWynik: ${netText}\nSaldo: ${formatCoins(balance)}`;
+  return `Stawka: ${formatCoins(bet)}\nWynik: ${netText}\nSaldo: ${formatCoins(balance)}${insuranceLine(insurance)}`;
 }
 
 // Każda gra zwraca { balance, summary, shown } albo null, gdy saldo nie wystarcza na stawkę.
@@ -257,10 +266,11 @@ function resultLines(bet, payout, balance) {
 
 async function playSlots(click, guildId, user, bet) {
   const spin = casino.spinSlots();
-  const payout = Math.floor(bet * spin.multiplier);
+  const basePayout = Math.floor(bet * spin.multiplier);
 
-  const balance = await casino.settleBet(guildId, user.id, bet, payout, 'casino_automat');
-  if (balance === null) return null;
+  const settled = await casino.settleBetEx(guildId, user.id, bet, basePayout, 'casino_automat');
+  if (settled === null) return null;
+  const { balance, payout, insurance } = settled;
 
   const frame = (reels, footer) =>
     new EmbedBuilder().setColor(0x7a5420).setTitle('🎰 Automat Boba').setDescription(`# ${reels.join(' | ')}`).setFooter({ text: footer });
@@ -280,7 +290,7 @@ async function playSlots(click, guildId, user, bet) {
   const embed = new EmbedBuilder()
     .setColor(style.color)
     .setTitle(`🎰 ${style.head}`)
-    .setDescription(`# ${spin.reels.join(' | ')}\n${label}\n\n${resultLines(bet, payout, balance)}\n\n🥃 *Bob: ${style.quip}*`);
+    .setDescription(`# ${spin.reels.join(' | ')}\n${label}\n\n${resultLines(bet, payout, balance, insurance)}\n\n🥃 *Bob: ${style.quip}*`);
   if (pub) await pub.edit({ content: header, embeds: [embed], allowedMentions: noPings }).catch(() => null);
 
   return { balance, shown: Boolean(pub), summary: `🎰 ${spin.reels.join(' ')}: ${style.head} (stawka ${bet}, wypłata ${payout}, saldo ${balance})` };
@@ -288,10 +298,11 @@ async function playSlots(click, guildId, user, bet) {
 
 async function playRoulette(click, guildId, user, bet, kind, chosenNumber) {
   const spin = casino.spinRoulette(kind, chosenNumber);
-  const payout = bet * spin.multiplier;
+  const basePayout = bet * spin.multiplier;
 
-  const balance = await casino.settleBet(guildId, user.id, bet, payout, 'casino_ruletka');
-  if (balance === null) return null;
+  const settled = await casino.settleBetEx(guildId, user.id, bet, basePayout, 'casino_ruletka');
+  if (settled === null) return null;
+  const { balance, payout, insurance } = settled;
 
   const def = casino.ROULETTE_BETS[kind];
   const betLabel = kind === 'numer' ? `Numer ${chosenNumber} (x36)` : `${def.label} (x${def.multiplier})`;
@@ -309,7 +320,7 @@ async function playRoulette(click, guildId, user, bet, kind, chosenNumber) {
     .setColor(style.color)
     .setTitle(`🎡 ${style.head}`)
     .setDescription(
-      `Kula zatrzymała się na:\n# ${spin.color} ${spin.number}\n\n${resultLines(bet, payout, balance)}\n\n` +
+      `Kula zatrzymała się na:\n# ${spin.color} ${spin.number}\n\n${resultLines(bet, payout, balance, insurance)}\n\n` +
       `🥃 *Bob: ${spin.number === 0 ? 'Zero. Dom wygrywa. Zawsze wygrywa.' : style.quip}*`,
     );
   if (pub) await pub.edit({ content: header, embeds: [embed], allowedMentions: noPings }).catch(() => null);
@@ -319,10 +330,11 @@ async function playRoulette(click, guildId, user, bet, kind, chosenNumber) {
 
 async function playCoin(click, guildId, user, bet, side) {
   const flip = casino.flipCoin(side);
-  const payout = bet * flip.multiplier;
+  const basePayout = bet * flip.multiplier;
 
-  const balance = await casino.settleBet(guildId, user.id, bet, payout, 'casino_moneta');
-  if (balance === null) return null;
+  const settled = await casino.settleBetEx(guildId, user.id, bet, basePayout, 'casino_moneta');
+  if (settled === null) return null;
+  const { balance, payout, insurance } = settled;
 
   const header = `${user} rzuca monetą i stawia na: **${SIDE_LABELS[side]}**`;
   const pub = await openPublic(click, {
@@ -336,7 +348,7 @@ async function playCoin(click, guildId, user, bet, side) {
   const embed = new EmbedBuilder()
     .setColor(style.color)
     .setTitle(`🪙 ${style.head}`)
-    .setDescription(`Wypadło:\n# ${SIDE_LABELS[flip.result]}\n\n${resultLines(bet, payout, balance)}\n\n🥃 *Bob: ${style.quip}*`);
+    .setDescription(`Wypadło:\n# ${SIDE_LABELS[flip.result]}\n\n${resultLines(bet, payout, balance, insurance)}\n\n🥃 *Bob: ${style.quip}*`);
   if (pub) await pub.edit({ content: header, embeds: [embed], allowedMentions: noPings }).catch(() => null);
 
   return { balance, shown: Boolean(pub), summary: `🪙 ${SIDE_LABELS[flip.result]}: ${style.head} (stawka ${bet}, wypłata ${payout}, saldo ${balance})` };

@@ -19,6 +19,7 @@ const { syncLevelRole } = require('../utils/levelRoles');
 const TARGET_LABELS = {
   coins: 'Monety',
   xp: 'EXP i poziomy',
+  inventory: 'Ekwipunek (przedmioty, skrzynie, aktywne efekty)',
 };
 
 const CONFIRM_WORD = 'RESET';
@@ -36,7 +37,8 @@ module.exports = {
         .addChoices(
           { name: 'Monety', value: 'coins' },
           { name: 'EXP i poziomy', value: 'xp' },
-          { name: 'Wszystko (monety + EXP)', value: 'all' },
+          { name: 'Ekwipunek (przedmioty i skrzynie)', value: 'inventory' },
+          { name: 'Wszystko (monety + EXP + ekwipunek)', value: 'all' },
         ))
     .addUserOption((opt) =>
       opt.setName('osoba').setDescription('Kogo zresetować. Zostaw puste, żeby zresetować CAŁY serwer.')),
@@ -65,7 +67,7 @@ module.exports = {
     const preview = await db.previewReset(guild.id, userId, keys);
     const lines = keys.map((k) => {
       const p = preview[k];
-      const unit = k === 'coins' ? 'monet' : 'XP';
+      const unit = k === 'coins' ? 'monet' : k === 'xp' ? 'XP' : 'szt.';
       return `• **${TARGET_LABELS[k] ?? k}**: ${p.people} os., łącznie ${p.total.toLocaleString('pl-PL')} ${unit}`;
     });
 
@@ -174,7 +176,7 @@ module.exports = {
     const csvLines = ['typ,user_id,wartosc_1,wartosc_2,opis'];
     for (const k of keys) {
       for (const b of result[k].backup) {
-        const desc = b.type === 'monety' ? 'saldo / zarobione lacznie' : 'xp / poziom';
+        const desc = b.type === 'monety' ? 'saldo / zarobione lacznie' : b.type === 'ekwipunek' ? 'ilosc / przedmiot' : 'xp / poziom';
         csvLines.push([b.type, `"${b.userId}"`, b.a, b.b, desc].join(','));
       }
     }

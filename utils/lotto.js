@@ -285,6 +285,34 @@ async function buyTicket(guildId, userId, numbers, nowMs = Date.now()) {
   });
 }
 
+// ---------------- DARMOWE LOSY (z przedmiotów) ----------------
+// Działa w TRANSAKCJI przekazanej z zewnątrz (c), żeby zużycie przedmiotu i wydanie losów były atomowe.
+// Los jest za darmo, więc NIE dopisuje nic do puli (żeby nie tworzyć monet z niczego). Liczy się do limitu MAX_TICKETS.
+// Liczby losuje bot. Zwraca { granted, leftover, tickets, drawDate }: leftover = ile losów nie zmieściło się w limicie.
+async function grantFreeTicketsTx(c, guildId, userId, count, nowMs = Date.now()) {
+  await c.query('INSERT INTO lotto_state (guild_id, pool) VALUES ($1, 0) ON CONFLICT (guild_id) DO NOTHING', [guildId]);
+  const state = (await c.query('SELECT * FROM lotto_state WHERE guild_id = $1 FOR UPDATE', [guildId])).rows[0];
+  const drawDate = nextDrawDate(state.last_draw_date, nowMs);
+
+  const owned = (await c.query(
+    `SELECT COUNT(*)::int AS n FROM lotto_tickets WHERE guild_id = $1 AND user_id = $2 AND status = 'open'`,
+    [guildId, userId],
+  )).rows[0].n;
+
+  const granted = Math.max(0, Math.min(count, MAX_TICKETS - owned));
+  const tickets = [];
+  for (let i = 0; i < granted; i++) {
+    const nums = normalizeNumbers(pickDistinct());
+    const row = (await c.query(`
+      INSERT INTO lotto_tickets (guild_id, user_id, numbers, draw_date, status, created_at)
+      VALUES ($1, $2, $3, $4, 'open', $5::bigint) RETURNING id
+    `, [guildId, userId, nums.join(','), drawDate, nowMs])).rows[0];
+    tickets.push({ id: Number(row.id), numbers: nums });
+  }
+  if (granted > 0) await seedIfNeeded(c, state);
+  return { granted, leftover: count - granted, tickets, drawDate };
+}
+
 // ---------------- LOSOWANIE ----------------
 // Dla jednego serwera, w jednej transakcji: losuje liczby, rozlicza WSZYSTKIE otwarte losy
 // (z datą losowania <= today), wypłaca nagrody z puli i zostawia resztę jako kumulację.
@@ -561,6 +589,7 @@ module.exports = {
   getStatus,
   setAnnounceChannel,
   buyTicket,
+  grantFreeTicketsTx,
   runDraw,
   buildAnnouncement,
   buildStartAnnouncement,

@@ -96,7 +96,7 @@ function spinRoulette(kind, chosenNumber) {
 //  Zwraca nowe saldo albo null, gdy saldo nie wystarcza na stawkę.
 //  W dzienniku zapisywany jest wynik netto (wygrana minus stawka).
 // ------------------------------------------------------------
-async function settleBet(guildId, userId, bet, payout, reason) {
+async function settleBetEx(guildId, userId, bet, payout, reason) {
   if (!Number.isSafeInteger(bet) || bet <= 0) throw new Error('settleBet: stawka musi być dodatnią liczbą całkowitą');
   if (!Number.isSafeInteger(payout) || payout < 0) throw new Error('settleBet: wypłata musi być liczbą całkowitą >= 0');
 
@@ -115,21 +115,54 @@ async function settleBet(guildId, userId, bet, payout, reason) {
       await client.query('ROLLBACK');
       return null;
     }
+    let balance = Number(res.rows[0].balance);
 
-    const balance = Number(res.rows[0].balance);
+    // POLISA (przedmiot): jeśli gracz ją włączył, zużywa się przy TEJ grze (niezależnie od wyniku).
+    // Po przegranej jest szansa na zwrot straty do limitu. Wszystko w tej samej transakcji co rozliczenie.
+    let insurance = null;
+    const armed = await client.query(
+      `DELETE FROM user_armed WHERE guild_id = $1 AND user_id = $2 AND kind = 'polisa' RETURNING item_id`,
+      [guildId, userId],
+    );
+    const def = armed.rowCount > 0 ? require('./items').ITEMS[armed.rows[0].item_id] : null;
+    let refund = 0;
+    if (def && def.use?.type === 'polisa') {
+      const lost = bet - payout;
+      if (lost > 0 && randomInt(0, 100) < def.use.chance) refund = Math.min(lost, def.use.cap);
+      if (refund > 0) {
+        const upd = await client.query(
+          'UPDATE economy_accounts SET balance = balance + $3::bigint WHERE guild_id = $1 AND user_id = $2 RETURNING balance',
+          [guildId, userId, refund],
+        );
+        balance = Number(upd.rows[0].balance);
+      }
+      let bonusTicket = false;
+      if (refund > 0 && def.bonus?.onlyIfRefund && randomInt(0, 10000) < Math.round(def.bonus.chance * 10000)) {
+        await require('./inventory').addItem(client, guildId, userId, def.bonus.grant, 1);
+        bonusTicket = true;
+      }
+      insurance = { itemId: def.id, name: def.name, chance: def.use.chance, cap: def.use.cap, refund, bonusTicket, usedOnWin: lost <= 0 };
+    }
+
     await client.query(`
       INSERT INTO economy_transactions (guild_id, user_id, amount, balance_after, reason, created_at)
       VALUES ($1, $2, $3::bigint, $4::bigint, $5, $6::bigint)
-    `, [guildId, userId, payout - bet, balance, reason, Date.now()]);
+    `, [guildId, userId, payout - bet + refund, balance, reason, Date.now()]);
 
     await client.query('COMMIT');
-    return balance;
+    return { balance, payout: payout + refund, insurance };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => null);
     throw err;
   } finally {
     client.release();
   }
+}
+
+// Wersja zgodna ze starym kodem: zwraca samo saldo albo null
+async function settleBet(guildId, userId, bet, payout, reason) {
+  const res = await settleBetEx(guildId, userId, bet, payout, reason);
+  return res === null ? null : res.balance;
 }
 
 // ------------------------------------------------------------
@@ -193,6 +226,7 @@ module.exports = {
   spinRoulette,
   rouletteColor,
   settleBet,
+  settleBetEx,
   tryStartGame,
   finishGame,
   slotRtp,

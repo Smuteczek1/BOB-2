@@ -83,6 +83,31 @@ async function applyCredit(client, guildId, userId, amount, reason, ledger) {
 //  wystarczy dopisać tu kolejny wpis i etykietę w commands/reset.js, reszta zadziała sama.
 // ============================================================
 const RESET_TARGETS = {
+  inventory: {
+    async preview(guildId, userId) {
+      const res = await pool.query(`
+        SELECT COUNT(DISTINCT user_id)::int AS n, COALESCE(SUM(quantity), 0)::bigint AS total
+        FROM inventory
+        WHERE guild_id = $1 AND ($2::text IS NULL OR user_id = $2) AND quantity > 0
+      `, [guildId, userId]);
+      return { people: res.rows[0].n, total: Number(res.rows[0].total) };
+    },
+    async apply(client, guildId, userId) {
+      const rows = (await client.query(`
+        SELECT user_id, item_id, quantity FROM inventory
+        WHERE guild_id = $1 AND ($2::text IS NULL OR user_id = $2) FOR UPDATE
+      `, [guildId, userId])).rows;
+      for (const table of ['inventory', 'user_boosts', 'user_armed', 'item_daily_use']) {
+        await client.query(`DELETE FROM ${table} WHERE guild_id = $1 AND ($2::text IS NULL OR user_id = $2)`, [guildId, userId]);
+      }
+      return {
+        userIds: [...new Set(rows.map((r) => r.user_id))],
+        backup: rows.map((r) => ({ type: 'ekwipunek', userId: r.user_id, a: r.quantity, b: r.item_id })),
+      };
+    },
+  },
+
+
   coins: {
     async preview(guildId, userId) {
       const res = await pool.query(`
@@ -354,6 +379,43 @@ async function initDb() {
       CREATE INDEX IF NOT EXISTS idx_econ_tx_user ON economy_transactions(guild_id, user_id, created_at DESC);
     `);
 
+    // --- Sklep i ekwipunek ---
+    await query(`
+      CREATE TABLE IF NOT EXISTS inventory (
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        quantity INT NOT NULL CHECK (quantity >= 0),
+        PRIMARY KEY (guild_id, user_id, item_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS user_boosts (
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        family TEXT NOT NULL,
+        value INT NOT NULL,
+        expires_at BIGINT NOT NULL,
+        PRIMARY KEY (guild_id, user_id, family)
+      );
+
+      CREATE TABLE IF NOT EXISTS user_armed (
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        armed_at BIGINT NOT NULL,
+        PRIMARY KEY (guild_id, user_id, kind)
+      );
+
+      CREATE TABLE IF NOT EXISTS item_daily_use (
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        use_date TEXT NOT NULL,
+        PRIMARY KEY (guild_id, user_id, item_id)
+      );
+    `);
+
     console.log('✅ Baza danych Supabase (PostgreSQL) została pomyślnie zainicjalizowana.');
   } catch (err) {
     console.error('❌ Błąd podczas inicjalizacji bazy PostgreSQL:', err);
@@ -364,6 +426,8 @@ initDb();
 
 module.exports = {
   raw: pool,
+  withTransaction,
+  applyCredit,
 
   // --- Konfiguracja serwera ---
   async getGuildConfig(guildId) {
