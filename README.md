@@ -95,6 +95,7 @@ npm start
 | `/portfel [uzytkownik]` | Pokazuje saldo monet, zarobione łącznie i (dla Ciebie) ostatnie operacje | Wszyscy |
 | `/nagroda` | Dzienna nagroda: wybierasz jedną z trzech skrzyń (reset o północy, czas polski) | Wszyscy |
 | `/sklep` | Sklep Boba: kup skrzynię (przedmioty wypadają tylko ze skrzyń) | Wszyscy |
+| `/rynek` | Rynek graczy: kupuj i sprzedawaj przedmioty (prowizja 5%) | Wszyscy |
 | `/ekwipunek` | Twoje przedmioty i skrzynie; przy każdej pozycji przycisk Otwórz/Użyj (lista dzieli się na strony) | Wszyscy |
 | `/cclear kanal ilosc:<liczba/all> [uzytkownik]` | Usuwa wiadomości z bieżącego kanału | Zarządzanie wiadomościami |
 | `/cclear uzytkownik uzytkownik:<user> okres:<...>` | Usuwa wiadomości danego użytkownika ze WSZYSTKICH kanałów, z ostatnich X godzin | Zarządzanie wiadomościami |
@@ -184,6 +185,15 @@ ani nie da podwójnej nagrody. Saldo nie może zejść poniżej zera (ograniczen
 `economy_transactions`.
 
 Poziomy i drabinka ról na razie działają jak dotąd, równolegle do monet.
+
+### Rynek graczy (`/rynek`)
+
+Prywatne menu z zakładkami **Oferty** (kupno z potwierdzeniem, filtr rzadkości), **Wystaw** (wybór przedmiotu, cena własna albo sugerowana) i **Moje oferty** (anulowanie, ostatnie sprzedaże). Działa też przyciskiem **Rynek** w `/sklep`. Skrzynie się nie handlują; unikaty (Koniczyna, Podkowa, Korona, Moneta Void) tak, z wyższymi widełkami cen. Koniczyna i Podkowa przy sprzedaży obniżają poziom sprzedawcy o 1 i podnoszą go kupującemu (kupujący z maksymalnym poziomem albo z posiadanym unikatem nie kupi, a monety nie są pobierane).
+
+- Wystawiony przedmiot leży **w depozycie** (znika z ekwipunku) do sprzedaży, anulowania albo wygaśnięcia po 7 dniach. Wygasłe oferty wracają do sprzedawcy od razu przy otwarciu `/rynek` oraz co 10 minut w tle.
+- Kupno, wystawienie, anulowanie i zwrot to jedna transakcja w bazie z blokadą oferty: tego samego przedmiotu nie da się kupić dwa razy ani sprzedać i anulować jednocześnie.
+- Sprzedawca płaci **5% prowizji** (znika z gry), dostaje resztę. Limit: 5 aktywnych ofert na osobę. Ceny mają **twarde widełki** (`PRICE_BY_TIER`, `PRICE_BY_ITEM` w `utils/market.js`) i sugerowaną cenę (średnia z ostatnich 5 sprzedaży).
+- Ustawienia w `.env`: `MARKET_FEE` (domyślnie 0.05), `MARKET_LISTING_DAYS` (7), `MARKET_MAX_LISTINGS` (5). Tabela `market_listings`; reset ekwipunku (`/reset`) usuwa też aktywne oferty (przedmioty trafiają do kopii).
 
 ### Jak działa sklep i ekwipunek
 

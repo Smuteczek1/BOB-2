@@ -70,12 +70,19 @@ async function getArmed(guildId, userId) {
 // na maksymalnym poziomie (Koniczyna i Podkowa na poziomie 5).
 async function getOwnedUnique(guildId, userId) {
   const inv = await getInventory(guildId, userId);
-  return new Set(inv
-    .filter((i) => {
-      const def = items.ITEMS[i.itemId];
-      return def?.unique && i.quantity >= (def.maxLevel ?? 1);
+  // Przedmioty wystawione na rynku (w depozycie) nadal się liczą jako posiadane: inaczej unikat z oferty mógłby wypaść drugi raz
+  const escrow = await raw().query(
+    "SELECT item_id, COUNT(*)::int AS n FROM market_listings WHERE guild_id = $1 AND seller_id = $2 AND status = 'active' GROUP BY item_id",
+    [guildId, userId],
+  );
+  const total = new Map(inv.map((i) => [i.itemId, i.quantity]));
+  for (const r of escrow.rows) total.set(r.item_id, (total.get(r.item_id) ?? 0) + Number(r.n));
+  return new Set([...total.entries()]
+    .filter(([itemId, qty]) => {
+      const def = items.ITEMS[itemId];
+      return def?.unique && qty >= (def.maxLevel ?? 1);
     })
-    .map((i) => i.itemId));
+    .map(([itemId]) => itemId));
 }
 
 // ---------------- ZMIANY (zawsze wewnątrz transakcji: client z db.withTransaction) ----------------

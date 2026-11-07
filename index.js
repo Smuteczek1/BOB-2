@@ -341,6 +341,9 @@ client.once('ready', async () => {
   // 2. Porządkowanie kanałów tymczasowych
   await reconcileTempChannels();
 
+  // 2b. Rynek: co jakiś czas zwraca przedmioty z wygasłych ofert do sprzedawców
+  require('./utils/market').startSweeper();
+
   // 3. Jednorazowe wstawienie domyślnego rekordu sesji głosowej (jeśli tabela jest pusta)
   await seedInitialVoiceRecord();
 

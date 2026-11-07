@@ -5,6 +5,7 @@ const {
 const db = require('../db');
 const inv = require('../utils/inventory');
 const items = require('../utils/items');
+const market = require('./rynek');
 const { formatCoins } = require('../utils/economy');
 
 // Sklep jest zbudowany z Components V2 (Container + Section z przyciskiem obok skrzyni),
@@ -81,12 +82,12 @@ async function buildView(guildId, user, banner, disabled = false) {
     );
   }
 
-  // Zmiana typu sklepu: na razie zablokowane
+  // Zmiana typu sklepu: Rynek (przedmioty od graczy) otwiera osobne prywatne menu, Kosmetyczne wkrótce
   container.addSeparatorComponents(small());
-  container.addTextDisplayComponents(new TextDisplayBuilder().setContent('-# Zmień typ sklepu (wkrótce)'));
+  container.addTextDisplayComponents(new TextDisplayBuilder().setContent('-# Rynek graczy: kupuj i sprzedawaj przedmioty (też komendą `/rynek`) · Kosmetyczne wkrótce'));
   container.addActionRowComponents(
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(MARKET_ID).setStyle(ButtonStyle.Secondary).setLabel('Rynek').setEmoji('🏪').setDisabled(true),
+      new ButtonBuilder().setCustomId(MARKET_ID).setStyle(ButtonStyle.Primary).setLabel('Rynek').setEmoji('🏪').setDisabled(disabled),
       new ButtonBuilder().setCustomId(COSMETICS_ID).setStyle(ButtonStyle.Secondary).setLabel('Kosmetyczne').setEmoji('🎨').setDisabled(true),
     ),
   );
@@ -108,12 +109,20 @@ module.exports = {
 
     const collector = message.createMessageComponentCollector({
       componentType: ComponentType.Button,
-      filter: (i) => i.user.id === user.id && i.customId.startsWith(BUY_PREFIX),
+      filter: (i) => i.user.id === user.id && (i.customId.startsWith(BUY_PREFIX) || i.customId === MARKET_ID),
       time: 5 * 60_000,
     });
 
     let busy = false; // jedna akcja naraz, żeby szybkie klikanie nie kupiło dwa razy
     collector.on('collect', async (i) => {
+      // Rynek otwiera się jako osobna, prywatna wiadomość (sklep zostaje bez zmian)
+      if (i.customId === MARKET_ID) {
+        await market.openMenu(i).catch(async (err) => {
+          console.error('Błąd otwierania rynku ze sklepu:', err);
+          await i.reply({ content: '❌ Nie udało się otworzyć rynku. Spróbuj `/rynek`.', flags: MessageFlags.Ephemeral }).catch(() => null);
+        });
+        return;
+      }
       await i.deferUpdate().catch(() => null);
       if (busy) return;
       busy = true;

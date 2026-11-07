@@ -97,12 +97,21 @@ const RESET_TARGETS = {
         SELECT user_id, item_id, quantity FROM inventory
         WHERE guild_id = $1 AND ($2::text IS NULL OR user_id = $2) FOR UPDATE
       `, [guildId, userId])).rows;
+      // Przedmioty w depozycie rynku (aktywne oferty) też należą do ekwipunku: trafiają do kopii i są usuwane
+      const escrow = (await client.query(`
+        SELECT seller_id AS user_id, item_id FROM market_listings
+        WHERE guild_id = $1 AND status = 'active' AND ($2::text IS NULL OR seller_id = $2) FOR UPDATE
+      `, [guildId, userId])).rows;
+      await client.query(`DELETE FROM market_listings WHERE guild_id = $1 AND status = 'active' AND ($2::text IS NULL OR seller_id = $2)`, [guildId, userId]);
       for (const table of ['inventory', 'user_boosts', 'user_armed', 'item_daily_use', 'user_pity']) {
         await client.query(`DELETE FROM ${table} WHERE guild_id = $1 AND ($2::text IS NULL OR user_id = $2)`, [guildId, userId]);
       }
       return {
-        userIds: [...new Set(rows.map((r) => r.user_id))],
-        backup: rows.map((r) => ({ type: 'ekwipunek', userId: r.user_id, a: r.quantity, b: r.item_id })),
+        userIds: [...new Set([...rows, ...escrow].map((r) => r.user_id))],
+        backup: [
+          ...rows.map((r) => ({ type: 'ekwipunek', userId: r.user_id, a: r.quantity, b: r.item_id })),
+          ...escrow.map((r) => ({ type: 'ekwipunek', userId: r.user_id, a: 1, b: r.item_id })),
+        ],
       };
     },
   },
@@ -423,6 +432,24 @@ async function initDb() {
         meter DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (meter >= 0 AND meter <= 1),
         PRIMARY KEY (guild_id, user_id, source)
       );
+
+      -- Rynek graczy: wystawiony przedmiot leży "w depozycie" (znika z ekwipunku sprzedawcy do sprzedaży/anulowania/wygaśnięcia).
+      -- status: active | sold | cancelled | expired
+      CREATE TABLE IF NOT EXISTS market_listings (
+        id BIGSERIAL PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        seller_id TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        price BIGINT NOT NULL CHECK (price > 0),
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at BIGINT NOT NULL,
+        expires_at BIGINT NOT NULL,
+        closed_at BIGINT,
+        buyer_id TEXT,
+        fee BIGINT NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_market_active ON market_listings(guild_id, status, item_id);
+      CREATE INDEX IF NOT EXISTS idx_market_seller ON market_listings(guild_id, seller_id, status);
     `);
 
     console.log('✅ Baza danych Supabase (PostgreSQL) została pomyślnie zainicjalizowana.');
