@@ -311,6 +311,15 @@ client.on('interactionCreate', async (interaction) => {
       await handleStarterRoleToggle(interaction);
       return;
     }
+
+    // Przyciski pod ogłoszeniami lotto na kanale (działają też po restarcie bota)
+    if (interaction.isButton() && (interaction.customId === 'lotto_open' || interaction.customId === 'lotto_quick_pub')) {
+      const lottoCommand = client.commands.get('lotto');
+      if (!lottoCommand) return;
+      if (interaction.customId === 'lotto_open') await lottoCommand.openMenu(interaction);
+      else await lottoCommand.quickBuy(interaction);
+      return;
+    }
   } catch (err) {
     console.error('Błąd podczas obsługi interakcji:', err);
     const payload = { content: '❌ Wystąpił błąd podczas wykonywania tej akcji.', flags: MessageFlags.Ephemeral };
