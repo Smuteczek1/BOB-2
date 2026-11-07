@@ -28,12 +28,17 @@ const CHUNKS = (() => {
   return Array.from({ length: count }, (_, i) => ({ index: i, from: i * size + 1, to: Math.min(RANGE, (i + 1) * size) }));
 })();
 
+const pct = (p) => `${(p * 100).toFixed(p < 0.01 ? 2 : 1).replace('.', ',')}%`;
+
 function prizeLines() {
-  const lines = [`🏆 Trafione **${PICK} z ${PICK}**: **cała kumulacja** (dzielona, jeśli trafi kilka osób)`];
+  const lines = [
+    `🏆 Trafione **${PICK} z ${PICK}**: **cała kumulacja** · szansa **${pct(lotto.oddsFor(PICK))}** (1 na ${lotto.COMBINATIONS} losów)`,
+  ];
   for (let m = PICK - 1; m >= PICK - 2; m--) {
     const prize = lotto.prizeFor(m);
-    lines.push(`• Trafione **${m}**: ${formatCoins(prize)}${prize === PRICE ? ' (zwrot losu)' : ''}`);
+    lines.push(`• Trafione **${m}**: ${formatCoins(prize)}${prize === PRICE ? ' (zwrot losu)' : ''} · szansa **${pct(lotto.oddsFor(m))}**`);
   }
+  lines.push(`🎯 Szansa na jakąkolwiek nagrodę: **${pct(lotto.anyPrizeOdds())}** na każdy los`);
   lines.push(
     'Jeśli nikt nie trafi wszystkich liczb, pula przechodzi na następne losowanie. ' +
     `Po każdym losowaniu Bob zaokrągla ją w górę do pełnych ${lotto.ROUND_STEP}, a po wygranej startuje nowa, losowa kumulacja.`,

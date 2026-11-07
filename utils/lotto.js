@@ -7,22 +7,26 @@ const { formatCoins } = require('./economy');
 // ============================================================
 const PRICE = Number(process.env.LOTTO_TICKET_PRICE ?? 100); // cena jednego losu
 const MAX_TICKETS = Number(process.env.LOTTO_MAX_TICKETS ?? 5); // ile losów na osobę na jedno losowanie
-const PICK = Number(process.env.LOTTO_PICK ?? 4); // ile liczb wybiera gracz
-const RANGE = Number(process.env.LOTTO_RANGE ?? 25); // z ilu liczb (1..RANGE); 25 = max jednej listy w Discordzie
+const PICK = Number(process.env.LOTTO_PICK ?? 3); // ile liczb wybiera gracz
+const RANGE = Number(process.env.LOTTO_RANGE ?? 12); // z ilu liczb (1..RANGE); 25 = max jednej listy w Discordzie
 const DRAW_HOUR = Number(process.env.LOTTO_DRAW_HOUR ?? 20); // godzina losowania (czas polski)
 
 // Kumulacja: startowa kwota jest LOSOWANA (zawsze wielokrotność ROUND_STEP) na starcie i po każdej wygranej,
 // a po każdym losowaniu pula jest zaokrąglana W GÓRĘ do pełnych ROUND_STEP (np. 12 854 -> 13 000).
 // Te monety dorzuca "Bob" (powstają z niczego), a ich sumę zapisujemy w lotto_state.house_total.
 const ROUND_STEP = Number(process.env.LOTTO_ROUND ?? 500);
-const SEED_MIN = Number(process.env.LOTTO_SEED_MIN ?? 2000);
-const SEED_MAX = Number(process.env.LOTTO_SEED_MAX ?? 10000);
+const SEED_MIN = Number(process.env.LOTTO_SEED_MIN ?? 500);
+const SEED_MAX = Number(process.env.LOTTO_SEED_MAX ?? 3000);
 
 // Drobne nagrody (wielokrotność ceny losu), płacone Z PULI:
-//  - trafione PICK-2 liczb -> dwukrotność ceny losu
-//  - trafione PICK-1 liczb -> dziesięciokrotność ceny losu
+//  - trafione PICK-2 liczb -> połowa ceny losu (domyślnie x0,5)
+//  - trafione PICK-1 liczb -> trzykrotność ceny losu (domyślnie x3)
 //  - trafione WSZYSTKIE liczby -> cała pula (kumulacja), dzielona między zwycięzców
-const PRIZE_MULTIPLIERS = { [PICK - 2]: 2, [PICK - 1]: 10 };
+// Przy domyślnych 3 z 12 drobne nagrody zwracają graczom ok. 61% ceny losu, a reszta wpada do kumulacji,
+// która trafia się średnio raz na 220 losów.
+const PRIZE_NEAR = Number(process.env.LOTTO_PRIZE_NEAR ?? 3);
+const PRIZE_MINOR = Number(process.env.LOTTO_PRIZE_MINOR ?? 0.5);
+const PRIZE_MULTIPLIERS = { [PICK - 2]: PRIZE_MINOR, [PICK - 1]: PRIZE_NEAR };
 // Drobne nagrody łącznie nie mogą zjeść więcej niż ta część puli, żeby kumulacja nigdy nie była pusta.
 // Gdyby w danym losowaniu przekroczyły limit, są proporcjonalnie zmniejszane (rzadkie, głównie na starcie).
 const SMALL_PRIZE_CAP = 0.75;
@@ -34,7 +38,23 @@ if (ROUND_STEP < 1 || SEED_MIN > SEED_MAX || SEED_MIN % ROUND_STEP !== 0 || SEED
   throw new Error('Lotto: LOTTO_SEED_MIN i LOTTO_SEED_MAX muszą być wielokrotnościami LOTTO_ROUND i SEED_MIN <= SEED_MAX');
 }
 
-const prizeFor = (matches) => (PRIZE_MULTIPLIERS[matches] ?? 0) * PRICE;
+const prizeFor = (matches) => Math.round((PRIZE_MULTIPLIERS[matches] ?? 0) * PRICE);
+
+// Dokładne szanse (rozkład hipergeometryczny): ile jest układów z dokładnie m trafieniami
+const choose = (n, k) => {
+  if (k < 0 || k > n) return 0;
+  let r = 1;
+  for (let i = 1; i <= k; i++) r = (r * (n - k + i)) / i;
+  return Math.round(r);
+};
+const COMBINATIONS = choose(RANGE, PICK);
+const oddsFor = (matches) => (choose(PICK, matches) * choose(RANGE - PICK, PICK - matches)) / COMBINATIONS;
+// Szansa na jakąkolwiek nagrodę (przynajmniej PICK-2 trafień z nagrodą > 0)
+const anyPrizeOdds = () => {
+  let p = 0;
+  for (let m = 0; m <= PICK; m++) if (m === PICK || prizeFor(m) > 0) p += oddsFor(m);
+  return p;
+};
 
 // Zaokrąglenie w górę do pełnych ROUND_STEP (12 854 -> 13 000, 13 000 -> 13 000)
 const roundUp = (n) => Math.ceil(n / ROUND_STEP) * ROUND_STEP;
@@ -347,19 +367,23 @@ async function runDraw(guildId, todayDate, nowMs = Date.now(), forcedNumbers = n
     const drawn = forcedNumbers ?? pickDistinct();
 
     // 1) kto ile trafił
+    // Losy ze starych zasad (inna liczba wybranych liczb niż teraz) nie biorą udziału: dostają zwrot ceny losu.
     const graded = tickets.map((t) => {
       const mine = parseNumbers(t.numbers);
-      return { id: Number(t.id), userId: t.user_id, numbers: mine, matches: countMatches(mine, drawn) };
+      const legacy = mine.length !== PICK || mine.some((n) => n > RANGE);
+      return { id: Number(t.id), userId: t.user_id, numbers: mine, legacy, matches: legacy ? 0 : countMatches(mine, drawn) };
     });
-    const jackpotTickets = graded.filter((t) => t.matches === PICK);
+    const jackpotTickets = graded.filter((t) => !t.legacy && t.matches === PICK);
 
     // 2) drobne nagrody z puli (z limitem, żeby nie opróżnić kumulacji)
-    const smallWanted = graded.reduce((sum, t) => sum + (t.matches < PICK ? prizeFor(t.matches) : 0), 0);
-    const smallBudget = Math.floor(poolBefore * SMALL_PRIZE_CAP);
+    let refunds = 0;
+    for (const t of graded) if (t.legacy) refunds += PRICE;
+    const smallWanted = graded.reduce((sum, t) => sum + (!t.legacy && t.matches < PICK ? prizeFor(t.matches) : 0), 0);
+    const smallBudget = Math.max(0, Math.floor((poolBefore - refunds) * SMALL_PRIZE_CAP));
     const scale = smallWanted > smallBudget ? smallBudget / smallWanted : 1;
     let smallPaid = 0;
     for (const t of graded) {
-      t.prize = t.matches < PICK ? Math.floor(prizeFor(t.matches) * scale) : 0;
+      t.prize = t.legacy ? PRICE : t.matches < PICK ? Math.floor(prizeFor(t.matches) * scale) : 0;
       smallPaid += t.prize;
     }
 
@@ -395,8 +419,8 @@ async function runDraw(guildId, todayDate, nowMs = Date.now(), forcedNumbers = n
     // 5) zamknięcie losów, historia i nowy stan puli
     for (const t of graded) {
       await c.query(
-        `UPDATE lotto_tickets SET status = 'drawn', matches = $2, prize = $3::bigint WHERE id = $1`,
-        [t.id, t.matches, t.prize],
+        `UPDATE lotto_tickets SET status = $4, matches = $2, prize = $3::bigint WHERE id = $1`,
+        [t.id, t.matches, t.prize, t.legacy ? 'void' : 'drawn'],
       );
     }
     await c.query(
@@ -409,7 +433,7 @@ async function runDraw(guildId, todayDate, nowMs = Date.now(), forcedNumbers = n
     `, [guildId, todayDate, drawn.join(','), tickets.length, poolBefore, smallPaid, jackpotTickets.length, jackpotEach, poolAfter, houseAdded, nowMs]);
 
     const tiers = {};
-    for (const t of graded) if (t.matches < PICK && t.prize > 0) tiers[t.matches] = (tiers[t.matches] ?? 0) + 1;
+    for (const t of graded) if (!t.legacy && t.matches < PICK && t.prize > 0) tiers[t.matches] = (tiers[t.matches] ?? 0) + 1;
 
     return {
       skipped: false,
@@ -427,6 +451,9 @@ async function runDraw(guildId, todayDate, nowMs = Date.now(), forcedNumbers = n
       houseAdded,
       newCycle,
       totalByUser,
+      // wyniki każdego losu (do wiadomości na kanale lotto)
+      results: graded.filter((t) => !t.legacy).map((t) => ({ userId: t.userId, numbers: t.numbers, matches: t.matches, prize: t.prize })),
+      refundedLegacy: graded.filter((t) => t.legacy).length,
     };
   });
 }
@@ -461,6 +488,24 @@ function buildAnnouncement(summary) {
     .sort((a, b) => b - a)
     .map((m) => `• trafione **${m}**: ${summary.tiers[m]} ${summary.tiers[m] === 1 ? 'los' : 'losów'} po ${formatCoins(prizeFor(m))}${summary.scaled ? ' (zmniejszone, bo pula była mała)' : ''}`);
   if (tierLines.length > 0) lines.push('', '**Drobne nagrody:**', ...tierLines);
+
+  // Wyniki graczy (tylko tu, na kanale lotto): kto ile trafił, także "prawie" trafieni
+  const results = [...(summary.results ?? [])].sort((a, b) => b.matches - a.matches || b.prize - a.prize);
+  if (results.length > 0) {
+    const MAX_LINES = 15;
+    const mark = (r) =>
+      r.matches === PICK ? '💰 **TRAFIONE!**' : r.matches === PICK - 1 ? '😮 prawie! Zabrakło jednej liczby' : r.matches > 0 ? 'trafione' : 'pudło';
+    const rows = results.slice(0, MAX_LINES).map((r) => {
+      const hit = r.matches > 0 ? `**${r.matches} z ${PICK}**` : `0 z ${PICK}`;
+      const prize = r.matches < PICK && r.prize > 0 ? ` → ${formatCoins(r.prize)}` : '';
+      return `• <@${r.userId}> ${formatNumbers(r.numbers)}: ${hit} (${mark(r)})${prize}`;
+    });
+    lines.push('', '**Wyniki graczy:**', ...rows);
+    if (results.length > MAX_LINES) lines.push(`_…i jeszcze ${results.length - MAX_LINES} ${results.length - MAX_LINES === 1 ? 'los' : 'losów'}._`);
+  }
+  if (summary.refundedLegacy > 0) {
+    lines.push('', `↩️ ${summary.refundedLegacy} ${summary.refundedLegacy === 1 ? 'los ze starych zasad dostał' : 'losów ze starych zasad dostało'} zwrot ceny.`);
+  }
 
   // Po wygranej nową, losową kumulację ogłasza osobna wiadomość (buildStartAnnouncement)
   if (!jackpotHit) {
@@ -575,6 +620,9 @@ module.exports = {
   SMALL_PRIZE_CAP,
   PRIZE_MULTIPLIERS,
   prizeFor,
+  oddsFor,
+  anyPrizeOdds,
+  COMBINATIONS,
   roundUp,
   randomSeed,
   warsawParts,
