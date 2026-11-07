@@ -35,7 +35,7 @@ module.exports = {
     // Pierwsza konfiguracja: Bob losuje startową kumulację i od razu ogłasza ją na wybranym kanale
     if (seededNow) {
       await channel
-        .send({ embeds: [lotto.buildStartAnnouncement(pool, { first: true })], allowedMentions: { parse: [] } })
+        .send({ ...lotto.buildStartAnnouncement(pool, { first: true }), allowedMentions: { parse: [] } })
         .catch((err) => console.error('Lotto: nie wysłano wiadomości startowej:', err.message));
     }
 
