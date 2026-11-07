@@ -415,4 +415,264 @@ async function runDraw(guildId, todayDate, nowMs = Date.now(), forcedNumbers = n
       await c.query(`
         INSERT INTO economy_transactions (guild_id, user_id, amount, balance_after, reason, created_at)
         VALUES ($1, $2, $3::bigint, $4::bigint, 'lotto_win', $5::bigint)
-      `, [guildId, userId, 
+      `, [guildId, userId, amount, Number(res.rows[0].balance), nowMs]);
+    }
+
+    // 5) zamknięcie losów, historia i nowy stan puli
+    for (const t of graded) {
+      await c.query(
+        `UPDATE lotto_tickets SET status = $4, matches = $2, prize = $3::bigint WHERE id = $1`,
+        [t.id, t.matches, t.prize, t.legacy ? 'void' : 'drawn'],
+      );
+    }
+    await c.query(
+      'UPDATE lotto_state SET pool = $2::bigint, last_draw_date = $3, house_total = house_total + $4::bigint WHERE guild_id = $1',
+      [guildId, poolAfter, todayDate, houseAdded],
+    );
+    await c.query(`
+      INSERT INTO lotto_draws (guild_id, draw_date, numbers, tickets, pool_before, small_paid, jackpot_winners, jackpot_each, pool_after, house_added, drawn_at)
+      VALUES ($1, $2, $3, $4, $5::bigint, $6::bigint, $7, $8::bigint, $9::bigint, $10::bigint, $11::bigint)
+    `, [guildId, todayDate, drawn.join(','), tickets.length, poolBefore, smallPaid, jackpotTickets.length, jackpotEach, poolAfter, houseAdded, nowMs]);
+
+    const tiers = {};
+    for (const t of graded) if (!t.legacy && t.matches < PICK && t.prize > 0) tiers[t.matches] = (tiers[t.matches] ?? 0) + 1;
+
+    return {
+      skipped: false,
+      drawDate: todayDate,
+      numbers: drawn,
+      ticketCount: tickets.length,
+      poolBefore,
+      smallPaid,
+      scaled: scale < 1,
+      tiers,
+      jackpotWinners: jackpotTickets.map((t) => t.userId),
+      jackpotEach,
+      poolRemaining,
+      poolAfter,
+      houseAdded,
+      newCycle,
+      totalByUser,
+      // wyniki każdego losu (do wiadomości na kanale lotto)
+      results: graded.filter((t) => !t.legacy).map((t) => ({ userId: t.userId, numbers: t.numbers, matches: t.matches, prize: t.prize })),
+      refundedLegacy: graded.filter((t) => t.legacy).length,
+    };
+  });
+}
+
+// ============================================================
+//  OGŁOSZENIE WYNIKÓW + HARMONOGRAM
+// ============================================================
+// ============================================================
+//  OGŁOSZENIA (Components V2: kontener w stylu sklepu) + PRZYCISKI KUPNA
+// ============================================================
+const OPEN_ID = 'lotto_open'; // przycisk pod ogłoszeniem: otwiera prywatne menu lotto
+const QUICK_ID = 'lotto_quick_pub'; // przycisk pod ogłoszeniem: kupuje losowy los jednym kliknięciem
+const V2 = MessageFlags.IsComponentsV2;
+
+const losy = (n) => (n === 1 ? 'los' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 'losy' : 'losów');
+const text = (s) => new TextDisplayBuilder().setContent(s);
+const sep = (big = false) => new SeparatorBuilder().setSpacing(big ? SeparatorSpacingSize.Large : SeparatorSpacingSize.Small);
+const bigCoins = (n) => `${Number(n).toLocaleString('pl-PL')} 🪙`;
+const balls = (nums) => nums.map((n) => String(n).padStart(2, '0')).join('  ·  ');
+
+function buyRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(OPEN_ID).setLabel('Kup los').setEmoji('🎟️').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(QUICK_ID).setLabel(`Szybki los (${PRICE})`).setEmoji('⚡').setStyle(ButtonStyle.Primary),
+  );
+}
+
+function nextDrawLine(lastDrawDate) {
+  const ts = Math.floor(drawTimestamp(nextDrawDate(lastDrawDate)) / 1000);
+  return `⏰ Następne losowanie: <t:${ts}:F> (<t:${ts}:R>)`;
+}
+
+function buildAnnouncement(summary) {
+  const jackpotHit = summary.jackpotWinners.length > 0;
+  const uniqueWinners = [...new Set(summary.jackpotWinners)];
+  const box = new ContainerBuilder().setAccentColor(jackpotHit ? 0xf1c40f : 0x3498db);
+
+  box.addTextDisplayComponents(
+    text(`## ${jackpotHit ? '🎉 JACKPOT! Kumulacja trafiona' : '🎱 Wyniki losowania'}\n-# Losowanie z dnia ${summary.drawDate} · sprzedanych losów: ${summary.ticketCount}`),
+  );
+  box.addSeparatorComponents(sep());
+  box.addTextDisplayComponents(text(`### Wylosowane liczby\n# 🟡  ${balls(summary.numbers)}`));
+  box.addSeparatorComponents(sep());
+
+  if (jackpotHit) {
+    const total = summary.jackpotEach * summary.jackpotWinners.length;
+    box.addTextDisplayComponents(
+      text(
+        `### 💰 Kumulacja trafiona!\n# ${bigCoins(total)}\n` +
+        uniqueWinners.map((id) => `• <@${id}> — **${bigCoins(summary.jackpotEach * summary.jackpotWinners.filter((w) => w === id).length)}**`).join('\n'),
+      ),
+    );
+    box.addSeparatorComponents(sep());
+    box.addTextDisplayComponents(text(`### 🌱 Nowa kumulacja startuje od\n# ${bigCoins(summary.poolAfter)}\n-# Tyle Bob wrzucił do puli na start.`));
+  } else {
+    const topUp = summary.houseAdded > 0 ? `\n-# Bob dorzucił ${formatCoins(summary.houseAdded)}, żeby pula była okrągła.` : '';
+    box.addTextDisplayComponents(
+      text(`### 😮‍💨 Nikt nie trafił ${PICK} z ${PICK}\nPula przechodzi dalej i rośnie. Kumulacja na następne losowanie:\n# ${bigCoins(summary.poolAfter)}${topUp}`),
+    );
+  }
+
+  // Drobne nagrody i wyniki graczy (tylko tu, na kanale lotto)
+  const tierLines = Object.keys(summary.tiers)
+    .map(Number)
+    .sort((a, b) => b - a)
+    .map((m) => `• **${m} z ${PICK}**: ${summary.tiers[m]} ${losy(summary.tiers[m])} po ${formatCoins(prizeFor(m))}${summary.scaled ? ' _(zmniejszone, pula była mała)_' : ''}`);
+
+  const results = [...(summary.results ?? [])].sort((a, b) => b.matches - a.matches || b.prize - a.prize);
+  const MAX_LINES = 12;
+  const mark = (r) => (r.matches === PICK ? '💰 TRAFIONE!' : r.matches === PICK - 1 ? '😮 prawie! zabrakło jednej' : r.matches > 0 ? '✅' : '▫️');
+  const rows = results.slice(0, MAX_LINES).map((r) => {
+    const prize = r.matches < PICK && r.prize > 0 ? ` → ${formatCoins(r.prize)}` : '';
+    return `${mark(r)} <@${r.userId}> \`${formatNumbers(r.numbers)}\` · **${r.matches}/${PICK}**${prize}`;
+  });
+  if (results.length > MAX_LINES) rows.push(`_…i jeszcze ${results.length - MAX_LINES} ${losy(results.length - MAX_LINES)}_`);
+
+  if (tierLines.length > 0 || rows.length > 0) {
+    box.addSeparatorComponents(sep());
+    if (tierLines.length > 0) box.addTextDisplayComponents(text(`### 🎁 Drobne nagrody\n${tierLines.join('\n')}`));
+    if (rows.length > 0) box.addTextDisplayComponents(text(`### 📋 Wyniki graczy\n${rows.join('\n')}`));
+  }
+  if (summary.refundedLegacy > 0) {
+    box.addTextDisplayComponents(text(`-# ↩️ ${summary.refundedLegacy} ${summary.refundedLegacy === 1 ? 'los ze starych zasad dostał' : 'losów ze starych zasad dostało'} zwrot ceny.`));
+  }
+
+  box.addSeparatorComponents(sep(true));
+  box.addTextDisplayComponents(text(`${nextDrawLine(summary.drawDate)}\n-# Cena losu: ${formatCoins(PRICE)} · ${PICK} liczby z ${RANGE} · kup los przyciskiem poniżej albo komendą \`/lotto\``));
+  box.addActionRowComponents(buyRow());
+
+  const components = [];
+  if (jackpotHit) components.push(text(`🎉 ${uniqueWinners.map((id) => `<@${id}>`).join(' ')}`));
+  components.push(box);
+  return { components, flags: V2 };
+}
+
+// Wiadomość o startowej kumulacji: przy pierwszym uruchomieniu (z /setup-lotto)
+function buildStartAnnouncement(pool, { first = false } = {}) {
+  const box = new ContainerBuilder().setAccentColor(0x2ecc71);
+  box.addTextDisplayComponents(text(`## ${first ? '🎱 Lotto Boba rusza!' : '🌱 Startuje nowa kumulacja!'}`));
+  box.addSeparatorComponents(sep());
+  box.addTextDisplayComponents(text(`### Kumulacja na start\n# ${bigCoins(pool)}\n-# Tyle Bob wrzucił do puli. Każdy kupiony los dokłada się do niej, a jeśli nikt nie trafi, pula rośnie dalej.`));
+  box.addSeparatorComponents(sep());
+  box.addTextDisplayComponents(
+    text(
+      `### Zasady\n• Wybierasz **${PICK} liczby z ${RANGE}**, do **${MAX_TICKETS} losów** na losowanie\n` +
+      `• 🏆 **${PICK} z ${PICK}**: cała kumulacja · szansa **${(oddsFor(PICK) * 100).toFixed(2).replace('.', ',')}%**\n` +
+      `• 🥈 **${PICK - 1} z ${PICK}**: ${formatCoins(prizeFor(PICK - 1))} · szansa **${(oddsFor(PICK - 1) * 100).toFixed(1).replace('.', ',')}%**\n` +
+      `• 🥉 **${PICK - 2} z ${PICK}**: ${formatCoins(prizeFor(PICK - 2))} · szansa **${(oddsFor(PICK - 2) * 100).toFixed(1).replace('.', ',')}%**\n` +
+      `• Losowanie codziennie o **${DRAW_HOUR}:00**`,
+    ),
+  );
+  box.addActionRowComponents(buyRow());
+  return { components: [box], flags: V2 };
+}
+
+async function announce(client, guildId, summary) {
+  const row = (await getPool().query('SELECT channel_id FROM lotto_state WHERE guild_id = $1', [guildId])).rows[0];
+  if (!row?.channel_id) return false;
+
+  const channel = await client.channels.fetch(row.channel_id).catch(() => null);
+  if (!channel?.isTextBased?.()) return false;
+
+  const winners = [...new Set(summary.jackpotWinners)];
+  const sent = await channel
+    .send({ ...buildAnnouncement(summary), allowedMentions: { users: winners } })
+    .catch((err) => {
+      console.error('Lotto: nie wysłano ogłoszenia:', err.message);
+      return null;
+    });
+
+  // Po wygranej: osobna wiadomość z nową, wylosowaną kumulacją startową
+  if (summary.newCycle) {
+    await channel
+      .send({ ...buildStartAnnouncement(summary.poolAfter), allowedMentions: { parse: [] } })
+      .catch((err) => console.error('Lotto: nie wysłano ogłoszenia nowej kumulacji:', err.message));
+  }
+  return Boolean(sent);
+}
+
+// Jeden obieg: jeśli jest już po godzinie losowania, rozlicza wszystkie serwery z otwartymi losami.
+// Wywoływane co minutę oraz od razu po starcie bota (nadrabia losowanie, jeśli bot był wyłączony).
+let tickRunning = false;
+async function tick(client, nowMs = Date.now()) {
+  if (tickRunning) return [];
+  tickRunning = true;
+  const results = [];
+  try {
+    const { date, hour } = warsawParts(nowMs);
+    if (hour < DRAW_HOUR) return results;
+
+    await ensureSchema();
+    const guilds = (await getPool().query(
+      `SELECT DISTINCT guild_id FROM lotto_tickets WHERE status = 'open' AND draw_date <= $1`,
+      [date],
+    )).rows;
+
+    for (const { guild_id: guildId } of guilds) {
+      try {
+        const summary = await runDraw(guildId, date, nowMs);
+        if (!summary) continue;
+        results.push({ guildId, summary });
+        if (!summary.skipped) await announce(client, guildId, summary);
+      } catch (err) {
+        console.error(`Lotto: błąd losowania na ${guildId}:`, err);
+      }
+    }
+  } catch (err) {
+    console.error('Lotto: błąd harmonogramu:', err);
+  } finally {
+    tickRunning = false;
+  }
+  return results;
+}
+
+function startScheduler(client) {
+  const run = () => tick(client).catch((err) => console.error('Lotto: błąd obiegu:', err));
+  run(); // nadrobienie po restarcie
+  const timer = setInterval(run, 60_000);
+  if (typeof timer.unref === 'function') timer.unref();
+  console.log(`🎱 Lotto: harmonogram uruchomiony (losowanie codziennie o ${DRAW_HOUR}:00, czas polski).`);
+}
+
+module.exports = {
+  PRICE,
+  MAX_TICKETS,
+  PICK,
+  RANGE,
+  DRAW_HOUR,
+  ROUND_STEP,
+  SEED_MIN,
+  SEED_MAX,
+  SMALL_PRIZE_CAP,
+  PRIZE_MULTIPLIERS,
+  prizeFor,
+  oddsFor,
+  anyPrizeOdds,
+  COMBINATIONS,
+  roundUp,
+  randomSeed,
+  warsawParts,
+  addDays,
+  drawTimestamp,
+  nextDrawDate,
+  pickDistinct,
+  normalizeNumbers,
+  formatNumbers,
+  countMatches,
+  ensureSchema,
+  getStatus,
+  setAnnounceChannel,
+  buyTicket,
+  grantFreeTicketsTx,
+  runDraw,
+  buildAnnouncement,
+  buildStartAnnouncement,
+  OPEN_ID,
+  QUICK_ID,
+  tick,
+  startScheduler,
+};
