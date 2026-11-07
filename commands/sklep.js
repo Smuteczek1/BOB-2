@@ -19,18 +19,36 @@ const SHOP_CHESTS = () => Object.values(items.CHESTS).filter((c) => !c.legacy);
 const pctText = (p) => (Number.isInteger(p) ? `${p}%` : `${p.toFixed(1).replace('.', ',')}%`);
 const small = () => new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small);
 
-// Tekst skrzyni: nazwa i cena, a pod spodem lista poziomów, które mogą wypaść
-function chestText(c) {
-  const lines = items.tierOdds(c).map((t) => `${items.TIER_ICONS[t.tier]} ${items.TIER_NAMES[t.tier]} · ${pctText(t.pct)}`);
+// Tekst skrzyni: nazwa i cena, a pod spodem lista poziomów, które mogą wypaść.
+// bonus = szczęście + pech gracza (w %): przy bonusie pokazujemy szanse "bazowe → Twoje".
+function chestText(c, bonus = 0) {
+  const base = items.tierOdds(c);
+  const mine = bonus > 0 ? items.effectiveTierOdds(c, bonus) : base;
+  const pctOf = (list, tier) => list.find((t) => t.tier === tier)?.pct ?? 0;
+  const tiers = [...new Set([...base.map((t) => t.tier), ...mine.map((t) => t.tier)])]
+    .filter((tier) => pctOf(base, tier) > 0 || pctOf(mine, tier) >= 0.1) // bez wierszy "0%" dla poziomów z szansą poniżej 0,1%
+    .sort((a, b) => a - b);
+  const lines = tiers.map((tier) => {
+    const b = pctOf(base, tier);
+    const m = pctOf(mine, tier);
+    const shown = bonus > 0 && Math.abs(m - b) >= 0.1 ? `${pctText(b)} → **${pctText(m)}**` : pctText(b);
+    return `${items.TIER_ICONS[tier]} ${items.TIER_NAMES[tier]} · ${shown}`;
+  });
   const head = c.coins
     ? `monety ${c.coins[0].toLocaleString('pl-PL')}–${c.coins[1].toLocaleString('pl-PL')} + szansa na przedmiot ${Math.round(c.itemChance * 100)}%`
     : 'zawsze wypada przedmiot';
-  return `### ${c.emoji} ${c.name} · ${formatCoins(c.price)}\n-# ${head}\n${lines.join('\n')}`;
+  const luckNote = bonus > 0 ? ` · 🍀 Twój bonus: +${pctText(Math.round(bonus * 10) / 10)}` : '';
+  return `### ${c.emoji} ${c.name} · ${formatCoins(c.price)}\n-# ${head}${luckNote}\n${lines.join('\n')}`;
 }
 
 // banner: tekst po zakupie (albo null), disabled: wyłącza wszystkie przyciski (po upływie czasu)
 async function buildView(guildId, user, banner, disabled = false) {
-  const balance = Number((await db.getEconomyAccount(guildId, user.id))?.balance ?? 0);
+  const [account, luckInfo, pityMap] = await Promise.all([
+    db.getEconomyAccount(guildId, user.id),
+    inv.getLuckBreakdown(guildId, user.id),
+    inv.getAllPity(guildId, user.id),
+  ]);
+  const balance = Number(account?.balance ?? 0);
 
   const container = new ContainerBuilder().setAccentColor(0xd4af37);
 
@@ -43,6 +61,7 @@ async function buildView(guildId, user, banner, disabled = false) {
     new TextDisplayBuilder().setContent('## 🛒 Sklep Boba'),
     new TextDisplayBuilder().setContent(
       'Przedmiotów nie kupisz. **Wypadają ze skrzyń**, a każda skrzynia losuje z innych poziomów rzadkości. Skrzynię otwierasz w `/ekwipunek`.\n' +
+      'Szanse pokazują Twój bonus ze szczęścia i pecha (jeśli go masz).\n' +
       `Twoje saldo: ${formatCoins(balance)}`,
     ),
   );
@@ -57,7 +76,7 @@ async function buildView(guildId, user, banner, disabled = false) {
       .setDisabled(disabled || balance < c.price);
     container.addSectionComponents(
       new SectionBuilder()
-        .addTextDisplayComponents(new TextDisplayBuilder().setContent(chestText(c)))
+        .addTextDisplayComponents(new TextDisplayBuilder().setContent(chestText(c, items.totalBonus(luckInfo.luck, pityMap[c.id] ?? 0))))
         .setButtonAccessory(buy),
     );
   }

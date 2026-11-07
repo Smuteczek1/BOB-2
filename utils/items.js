@@ -1,4 +1,5 @@
 const { randomInt } = require('node:crypto');
+const { DAILY_TIERS } = require('./economy');
 
 // ============================================================
 //  KATALOG PRZEDMIOTÓW I SKRZYŃ
@@ -7,15 +8,50 @@ const { randomInt } = require('node:crypto');
 //  Poziomy (0-6) są takie same jak rzadkości skrzyń dziennych:
 //  0 Pospolita, 1 Niezwykła, 2 Rzadka, 3 Legendarna, 4 Mityczna, 5 Boska, 6 Void
 //
-//  kind:   consumable = jednorazowy | permanent = stały (trudny do zdobycia) | collectible = kolekcjonerski
-//  weight: waga w losowaniu W OBRĘBIE swojego poziomu (0 = na razie nie wypada)
-//  unique: można mieć tylko jedną sztukę (przy losowaniu pomijany, gdy już go masz)
-//  value:  przybliżona wartość w monetach (do ocen "najgorszej skrzyni" i do liczenia cen)
-//  bonus:  dodatkowy efekt; uruchamia się raz i NIE wywołuje kolejnych bonusów
+//  kind:     consumable = jednorazowy | permanent = stały (trudny do zdobycie) | collectible = kolekcjonerski
+//  weight:   waga w losowaniu W OBRĘBIE swojego poziomu (0 = na razie nie wypada)
+//  unique:   można mieć tylko jedną sztukę (przy losowaniu pomijany, gdy już go masz)
+//  maxLevel: (tylko z unique) kolejne sztuki podnoszą POZIOM przedmiotu (ilość w ekwipunku = poziom);
+//            po osiągnięciu maksymalnego poziomu przedmiot przestaje wypadać
+//  value:    przybliżona wartość w monetach (do ocen "najgorszej skrzyni" i do liczenia cen)
+//  bonus:    dodatkowy efekt; uruchamia się raz i NIE wywołuje kolejnych bonusów
 // ============================================================
 
 const TIER_NAMES = ['Pospolita', 'Niezwykła', 'Rzadka', 'Legendarna', 'Mityczna', 'Boska', 'Void'];
 const TIER_ICONS = ['⚪', '🟢', '🔵', '🟣', '🟠', '🔴', '⚫'];
+const MAX_TIER = TIER_NAMES.length - 1;
+
+// ============================================================
+//  SZCZĘŚCIE I PECH (wszystkie wartości do zmiany są tutaj)
+//
+//  Szczęście stałe: Koniczyna i Podkowa działają ZAWSZE. Ich poziom (ilość w ekwipunku, max MAX_LEVEL)
+//  daje LEVEL_BONUS[poziom] % szczęścia. Poziomy się nie sumują (liczy się obecny poziom).
+//  Gdy masz obie, dochodzi COMBO_BONUS %. Koniczynka (jednorazowa) daje ONCE_BONUS % na jedną skrzynię
+//  i sumuje się ze stałymi.
+//  Pech: licznik 0..1 (osobny dla każdego rodzaju skrzyni) rośnie po słabych losowaniach i daje do PITY_MAX %.
+//  Szczęście + pech razem nie przekroczą LUCK_CAP %.
+// ============================================================
+const MAX_LEVEL = 5;
+const LEVEL_BONUS = [0, 2, 4, 6, 8, 10];
+const COMBO_BONUS = 4;
+const ONCE_BONUS = 10;
+const LUCK_CAP = 30;
+const PITY_MAX = 10;
+const PITY_THRESHOLD = 0.4; // wynik poniżej 40. percentyla danej skrzyni to "słabe losowanie"
+const PITY_STEP = 1.0;      // jak mocno jedno losowanie rusza licznik pecha
+
+// Siła losowania: liczba 0-100 (+ bonus), z możliwością "przebicia" do STRENGTH.cap.
+//   crit:      szansa na losowe dodatkowe 0..critMax punktów siły
+//   upPerPoint: szansa na awans poziomu za każdy punkt siły ponad 100
+//   tierShift: szansa na awans poziomu za każdy punkt bonusu
+const STRENGTH = { crit: 0.03, critMax: 30, cap: 130, upPerPoint: 0.02, tierShift: 0.01 };
+
+// Przelicznik szczęścia: ile punktów siły daje 1% bonusu w danej skrzyni.
+// Tanie skrzynie mocniej reagują na siłę (przedmioty w poziomie bardzo różnią się wartością), więc mają niższy mnożnik.
+// Dobrane symulacją tak, by przy maksymalnym szczęściu (LUCK_CAP) zwrot ze sklepu wynosił ok. 100%
+// (z uwzględnieniem tego, że przedmioty pieniężne ze skrzyń też dostają bonus: klucz 'money').
+// Po zmianie ceny, wag, poziomów albo wartości przedmiotów warto te liczby przeliczyć ponownie.
+const CHEST_SCALE = { daily: 1, chest_braz: 0.18, chest_srebrna: 0.17, chest_zlota: 0.6, money: 0.15 };
 
 // Tabele nagród z "pieniężnych" przedmiotów: p = szansa, min/max = zakres wygranej,
 // fine = mandat (10% salda, ale nie więcej niż cap i nigdy poniżej zera)
@@ -46,9 +82,8 @@ const ITEMS = {
   },
   koniczynka: {
     id: 'koniczynka', name: 'Koniczynka', emoji: '🍀', tier: 0, kind: 'consumable', weight: 1, value: 150,
-    desc: '+5% szczęścia na 5 minut (rodzina koniczyn).',
-    use: { type: 'boost', family: 'koniczyna', value: 5, minutes: 5 },
-    bonus: { chance: 0.15, extendMinutes: 10, text: 'działa 10 minut zamiast 5' },
+    desc: `+${ONCE_BONUS}% szczęścia na następną skrzynię (dzienną albo ze sklepu). Sumuje się ze stałymi.`,
+    use: { type: 'arm_luck', bonus: ONCE_BONUS },
   },
 
   // ---------------- 🟢 NIEZWYKŁA ----------------
@@ -118,10 +153,9 @@ const ITEMS = {
 
   // ---------------- 🟠 MITYCZNA ----------------
   koniczyna: {
-    id: 'koniczyna', name: 'Koniczyna', emoji: '🍀', tier: 4, kind: 'permanent', unique: true, weight: 20, value: 3000,
-    desc: 'STAŁA. Raz dziennie (po północy) daje +5% szczęścia na 5 minut (rodzina koniczyn).',
-    use: { type: 'boost_daily', family: 'koniczyna', value: 5, minutes: 5 },
-    bonus: { chance: 0.10, extendMinutes: 10, text: 'działa 10 minut zamiast 5' },
+    id: 'koniczyna', name: 'Koniczyna', emoji: '🍀', tier: 4, kind: 'permanent', unique: true, maxLevel: MAX_LEVEL, luckFamily: 'koniczyna', weight: 20, value: 3000,
+    desc: `STAŁA, działa zawsze. Kolejne sztuki podnoszą jej poziom (max ${MAX_LEVEL}): szczęście od +${LEVEL_BONUS[1]}% do +${LEVEL_BONUS[MAX_LEVEL]}%.`,
+    use: { type: 'none', message: 'Koniczyna działa sama, nie trzeba jej używać. Kolejne sztuki ze skrzyń podnoszą jej poziom.' },
   },
   wytrych: {
     id: 'wytrych', name: 'Wytrych', emoji: '🔑', tier: 4, kind: 'consumable', weight: 0, value: 800,
@@ -137,9 +171,9 @@ const ITEMS = {
 
   // ---------------- 🔴 BOSKA ----------------
   podkowa: {
-    id: 'podkowa', name: 'Podkowa', emoji: '🐴', tier: 5, kind: 'permanent', unique: true, weight: 20, value: 3000,
-    desc: 'STAŁA. Raz dziennie (po północy) +5% szczęścia na 5 minut (rodzina podków). Z Koniczyną sumuje się, a razem dają dodatkowe +2%.',
-    use: { type: 'boost_daily', family: 'podkowa', value: 5, minutes: 5 },
+    id: 'podkowa', name: 'Podkowa', emoji: '🐴', tier: 5, kind: 'permanent', unique: true, maxLevel: MAX_LEVEL, luckFamily: 'podkowa', weight: 20, value: 3000,
+    desc: `STAŁA, działa zawsze. Kolejne sztuki podnoszą jej poziom (max ${MAX_LEVEL}): szczęście od +${LEVEL_BONUS[1]}% do +${LEVEL_BONUS[MAX_LEVEL]}%. Z Koniczyną dają dodatkowe +${COMBO_BONUS}%.`,
+    use: { type: 'none', message: 'Podkowa działa sama, nie trzeba jej używać. Kolejne sztuki ze skrzyń podnoszą jej poziom.' },
   },
   kufer: {
     id: 'kufer', name: 'Kufer Boba', emoji: '🧰', tier: 5, kind: 'consumable', weight: 60, value: 29600,
@@ -171,7 +205,9 @@ const ITEMS = {
 // Sklep ma 3 skrzynie. Każda ma WIDOCZNĄ listę poziomów rzadkości, które mogą w niej wypaść:
 //   tiers = [[poziom, waga], ...]  poziom 0-6 (0 Pospolita ... 6 Void); waga względna = szansa poziomu
 //   Konkretny przedmiot jest losowany wśród przedmiotów wylosowanego poziomu (wagi `weight` w ITEMS).
-//   Skrzynie mogą się na siebie nakładać (ten sam poziom w dwóch skrzyniach), ale niska nie dostaje wysokich.
+//   Szczęście i pech podnoszą "siłę losowania" i dają szansę na awans poziomu (patrz STRENGTH).
+//   Skrzynie mogą się na siebie nakładać (ten sam poziom w dwóch skrzyniach), ale niska nie dostaje wysokich
+//   (wysokie poziomy wypadają w niskiej skrzyni tylko dzięki awansowi z szczęścia/przebicia).
 //   coins = null (skrzynie ze sklepu nie dają monet), itemChance 1.0 = zawsze wypada przedmiot
 //   tier (pojedynczy) = tylko wygląd/komentarz Boba
 const CHESTS = {
@@ -203,9 +239,7 @@ const CHESTS = {
   chest_skrytka:    { id: 'chest_skrytka',    name: 'Skrytka Boba',        emoji: '📦', legacy: true, tier: 2, price: 860,    coins: null,           itemChance: 1.0, itemOnly: true },
 };
 
-// Szczęście: rodziny nie sumują się same ze sobą (działa najsilniejsza z rodziny), różne rodziny się sumują.
-const LUCK_CAP = 15;
-const LUCK_COMBO_BONUS = 2; // gdy aktywne są jednocześnie koniczyna i podkowa
+const LUCK_COMBO_BONUS = COMBO_BONUS; // zgodność ze starą nazwą
 
 const DAILY_ITEM_CHANCE = 0.20;
 const DAILY_ITEM_CHANCE_BUDZIK = 0.30;
@@ -214,21 +248,145 @@ const DAILY_ITEM_CHANCE_BUDZIK = 0.30;
 //  LOGIKA (czyste funkcje, bez bazy danych)
 // ============================================================
 
+// Losowość: domyślnie kryptograficzna. Tylko do obliczania statystyk (progi pecha, szanse w sklepie)
+// podmieniamy ją na Math.random przez withRng.
+let rnd = () => randomInt(0, 1_000_000_000) / 1_000_000_000;
+function withRng(gen, fn) {
+  const prev = rnd;
+  rnd = gen;
+  try { return fn(); } finally { rnd = prev; }
+}
+
 const chance = (p) => randomInt(0, 10000) < Math.round(p * 10000);
 
 function isChest(id) { return Object.prototype.hasOwnProperty.call(CHESTS, id); }
 function getDef(id) { return ITEMS[id] ?? CHESTS[id] ?? null; }
 
-function computeLuck(boosts) {
-  const byFamily = new Map();
-  for (const b of boosts) byFamily.set(b.family, Math.max(byFamily.get(b.family) ?? 0, b.value));
-  let sum = 0;
-  for (const v of byFamily.values()) sum += v;
-  if (byFamily.has('koniczyna') && byFamily.has('podkowa')) sum += LUCK_COMBO_BONUS;
-  return Math.min(sum, LUCK_CAP);
+// ---------------- SZCZĘŚCIE I PECH ----------------
+const clampLevel = (n) => Math.max(0, Math.min(MAX_LEVEL, Math.floor(Number(n)) || 0));
+const clamp01 = (x) => Math.min(1, Math.max(0, Number(x) || 0));
+
+// Szczęście z posiadanych przedmiotów: { koniczyna, podkowa } to poziomy (0 = brak), once = czy jest włączona Koniczynka.
+function luckBreakdown({ koniczyna = 0, podkowa = 0, once = false } = {}) {
+  const kLvl = clampLevel(koniczyna);
+  const pLvl = clampLevel(podkowa);
+  const k = LEVEL_BONUS[kLvl];
+  const p = LEVEL_BONUS[pLvl];
+  const combo = kLvl > 0 && pLvl > 0 ? COMBO_BONUS : 0;
+  const oneTime = once ? ONCE_BONUS : 0;
+  const raw = k + p + combo + oneTime;
+  return { koniczynaLevel: kLvl, podkowaLevel: pLvl, koniczyna: k, podkowa: p, combo, once: oneTime, raw, luck: Math.min(LUCK_CAP, raw) };
 }
 
-// Z szansą równą szczęściu losujemy DWA razy i bierzemy lepszy wynik.
+const pityBonus = (meter) => PITY_MAX * clamp01(meter);
+
+// Całkowity bonus (w %): szczęście + pech, ze wspólnym limitem
+function totalBonus(luck, pityMeter = 0) {
+  return Math.min(LUCK_CAP, luck + pityBonus(pityMeter));
+}
+
+// ---------------- SIŁA LOSOWANIA ----------------
+// Siła: 0-100 (+ punkty z bonusu), z rzadkim "przebiciem" ponad 100 (maks. STRENGTH.cap).
+function strength(points) {
+  let s = rnd() * 100 + points;
+  if (rnd() < STRENGTH.crit) s += rnd() * STRENGTH.critMax;
+  return Math.min(s, STRENGTH.cap);
+}
+
+// Awans poziomu: z bonusu (STRENGTH.tierShift za punkt) oraz z przebicia ponad 100 (STRENGTH.upPerPoint za punkt)
+function promote(tier, s, points, maxTier = MAX_TIER) {
+  let t = tier;
+  if (t < maxTier && points > 0 && rnd() < points * STRENGTH.tierShift) t += 1;
+  if (s > 100 && t < maxTier && rnd() < (s - 100) * STRENGTH.upPerPoint) t += 1;
+  return t;
+}
+
+function weightedPick(entries) {
+  const total = entries.reduce((s, e) => s + e.weight, 0);
+  if (total <= 0) return null;
+  let roll = rnd() * total;
+  for (const e of entries) {
+    if (roll < e.weight) return e;
+    roll -= e.weight;
+  }
+  return entries[entries.length - 1];
+}
+
+// Wybór wg pozycji 0..1: lista posortowana od najsłabszego, każdy przedmiot zajmuje odcinek proporcjonalny do wagi
+function pickByPosition(list, pos) {
+  const total = list.reduce((s, e) => s + e.weight, 0);
+  let x = Math.min(Math.max(pos, 0), 0.999999) * total;
+  for (const e of list) {
+    if (x < e.weight) return e;
+    x -= e.weight;
+  }
+  return list[list.length - 1];
+}
+
+// Przedmiot z poziomu wg siły. Unikalne (stałe i kolekcjonerskie) mają stałą szansę poza siłą,
+// pozostałe są uporządkowane od najsłabszego (wg value), a siła wybiera, który wypadnie.
+function itemFromTier(tier, s, owned = new Set()) {
+  const all = Object.values(ITEMS).filter(
+    (i) => i.tier === tier && i.weight > 0 && !(i.unique && owned.has(i.id)),
+  );
+  if (all.length === 0) return null;
+  const uniq = all.filter((i) => i.unique);
+  const norm = all.filter((i) => !i.unique).sort((a, b) => a.value - b.value);
+  if (uniq.length > 0) {
+    const total = all.reduce((x, i) => x + i.weight, 0);
+    const share = uniq.reduce((x, i) => x + i.weight, 0) / total;
+    if (norm.length === 0 || rnd() < share) return weightedPick(uniq);
+  }
+  return pickByPosition(norm, Math.min(s, 100) / 100);
+}
+
+// Gdy w poziomie nic nie zostało (np. same unikaty, które już masz), szukamy w sąsiednich poziomach
+function itemNearTier(tier, s, owned = new Set()) {
+  for (const off of [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6]) {
+    const t = tier + off;
+    if (t < 0 || t > MAX_TIER) continue;
+    const item = itemFromTier(t, s, owned);
+    if (item) return item;
+  }
+  return null;
+}
+
+// Jedna dzienna skrzynia: { tier, tierIndex, amount, item, strength }
+function rollDailyChest(bonusPct = 0, owned = new Set(), baseItemChance = DAILY_ITEM_CHANCE) {
+  const points = bonusPct * CHEST_SCALE.daily;
+  const r = Math.floor(rnd() * 1000);
+  let acc = 0;
+  let base = DAILY_TIERS.length - 1;
+  for (let i = 0; i < DAILY_TIERS.length; i += 1) {
+    acc += DAILY_TIERS[i].chance;
+    if (r < acc) { base = i; break; }
+  }
+  const s = strength(points);
+  const tierIndex = promote(base, s, points, DAILY_TIERS.length - 1);
+  const tier = DAILY_TIERS[tierIndex];
+  const amount = Math.round(tier.min + (tier.max - tier.min) * (s / 100)); // ponad 100 kwota rośnie dalej
+
+  let item = null;
+  if (rnd() < Math.min(1, baseItemChance * (1 + points / 100))) {
+    // Dzienna daje przedmioty najwyżej na poziomie Niezwykłym (siła 95+ = poziom 1)
+    item = s < 95 ? itemFromTier(0, (s / 95) * 100, owned) : itemFromTier(1, ((s - 95) / 5) * 100, owned);
+    if (!item) item = itemNearTier(0, s, owned);
+  }
+  return { tier, tierIndex, amount, item, strength: s };
+}
+
+// Jedna skrzynia ze sklepu: { item, tier, strength }
+function rollShopChest(chest, bonusPct = 0, owned = new Set()) {
+  const points = bonusPct * (CHEST_SCALE[chest.id] ?? 1);
+  const base = weightedPick(chest.tiers.map(([tier, weight]) => ({ tier, weight }))).tier;
+  const s = strength(points);
+  const tier = promote(base, s, points, MAX_TIER);
+  const item = itemNearTier(tier, s, owned);
+  return { item, tier, strength: s };
+}
+
+// ---------------- STARE FUNKCJE (legacy i zgodność) ----------------
+// Z szansą równą szczęściu losujemy DWA razy i bierzemy lepszy wynik. Używane tylko przez stare skrzynie.
 function luckyPick(rollFn, scoreFn, luck) {
   const first = rollFn();
   if (luck > 0 && chance(luck / 100)) {
@@ -236,17 +394,6 @@ function luckyPick(rollFn, scoreFn, luck) {
     return scoreFn(second) > scoreFn(first) ? second : first;
   }
   return first;
-}
-
-function weightedPick(entries) {
-  const total = entries.reduce((s, e) => s + e.weight, 0);
-  if (total <= 0) return null;
-  let roll = randomInt(0, total * 1000) / 1000;
-  for (const e of entries) {
-    if (roll < e.weight) return e;
-    roll -= e.weight;
-  }
-  return entries[entries.length - 1];
 }
 
 function pickItemFromTier(tier, owned) {
@@ -271,29 +418,34 @@ function dropItem(baseTier, owned = new Set()) {
   return null;
 }
 
-// Dzienna skrzynia daje przedmioty najwyżej na poziomie Niezwykłym
+// Stara dzienna: przedmioty najwyżej na poziomie Niezwykłym (nowa dzienna: rollDailyChest)
 function dropDailyItem(owned = new Set()) {
   const tier = randomInt(0, 100) < 95 ? 0 : 1;
   return pickItemFromTier(tier, owned) ?? pickItemFromTier(0, owned);
-}
-
-// Losowanie przedmiotu ze skrzyni: najpierw poziom (wg wag skrzyni), potem przedmiot z tego poziomu.
-// Unikalne, które już masz, są pomijane; gdy poziom się wyczerpie, losujemy z pozostałych poziomów skrzyni.
-function pickFromTiers(chest, owned = new Set()) {
-  const entries = chest.tiers.map(([tier, weight]) => ({ tier, weight }));
-  const first = weightedPick(entries);
-  const ordered = first ? [first, ...entries.filter((e) => e !== first)] : entries;
-  for (const e of ordered) {
-    const item = pickItemFromTier(e.tier, owned);
-    if (item) return item;
-  }
-  return null;
 }
 
 // Procentowe szanse poziomów w skrzyni (do wyświetlania w sklepie), od najniższego poziomu
 function tierOdds(chest) {
   const total = chest.tiers.reduce((s, [, w]) => s + w, 0);
   return chest.tiers.map(([tier, w]) => ({ tier, pct: (w / total) * 100 })).sort((a, b) => a.tier - b.tier);
+}
+
+// Szanse poziomów z uwzględnieniem bonusu gracza (szczęście + pech), liczone na próbce tej samej funkcji,
+// która losuje naprawdę. Wynik jest zapamiętany (zaokrąglony do 0,5% bonusu).
+const oddsCache = new Map();
+function effectiveTierOdds(chest, bonusPct, n = 30000) {
+  const bonus = Math.round(Math.max(0, bonusPct) * 2) / 2;
+  if (bonus === 0) return tierOdds(chest);
+  const key = `${chest.id}:${bonus}`;
+  if (oddsCache.has(key)) return oddsCache.get(key);
+  const counts = new Array(TIER_NAMES.length).fill(0);
+  withRng(Math.random, () => {
+    for (let i = 0; i < n; i += 1) counts[rollShopChest(chest, bonus, new Set()).tier] += 1;
+  });
+  const odds = counts.map((c, tier) => ({ tier, pct: (c / n) * 100 })).filter((o) => o.pct > 0);
+  if (oddsCache.size > 500) oddsCache.clear();
+  oddsCache.set(key, odds);
+  return odds;
 }
 
 // Średnia wartość przedmiotu ze skrzyni (do ustalania ceny: sklep ma zwracać ok. 75%)
@@ -308,23 +460,23 @@ function expectedItemValue(chest) {
   return ev;
 }
 
-// Zawartość jednej skrzyni (kupionej w sklepie)
-function rollChestContents(chest, luck = 0, owned = new Set()) {
+// Zawartość jednej skrzyni: { coins, item }. bonusPct = szczęście + pech (w %).
+function rollChestContents(chest, bonusPct = 0, owned = new Set()) {
+  if (chest.tiers) {
+    return { coins: 0, item: rollShopChest(chest, bonusPct, owned).item };
+  }
+  // Stare skrzynie (legacy): jak dawniej
+  const luck = Math.min(100, bonusPct);
   const coins = chest.coins
     ? luckyPick(() => randomInt(chest.coins[0], chest.coins[1] + 1), (x) => x, luck)
     : 0;
   const p = Math.min(1, chest.itemChance * (1 + luck / 100));
-  let item = null;
-  if (chance(p)) {
-    // Szczęście: z szansą równą szczęściu losujemy dwa razy i bierzemy cenniejszy przedmiot
-    item = chest.tiers
-      ? luckyPick(() => pickFromTiers(chest, owned), (it) => (it ? it.value : 0), luck)
-      : dropItem(chest.tier, owned);
-  }
+  const item = chance(p) ? dropItem(chest.tier, owned) : null;
   return { coins, item };
 }
 
-// Jedna próba "pieniężnego" przedmiotu: nic / wygrana / mandat
+// ---------------- PRZEDMIOTY "PIENIĘŻNE" ----------------
+// Stara jedna próba: nic / wygrana / mandat (bez szczęścia)
 function rollMoneyOnce(use, balance) {
   const roll = randomInt(0, 1000);
   let acc = 0;
@@ -341,8 +493,80 @@ function rollMoneyOnce(use, balance) {
 
 const moneyScore = (o) => (o.kind === 'gain' ? o.amount : o.kind === 'fine' ? -o.amount : 0);
 
-function rollMoney(use, balance, luck = 0) {
-  return luckyPick(() => rollMoneyOnce(use, balance), moneyScore, luck);
+// Wynik uporządkowany od najgorszego: mandat, nic, wygrane od najmniejszej. Siła wybiera miejsce na tej skali,
+// więc szczęście przesuwa szanse z mandatu i "nic" w stronę wygranych. Przy bonusie 0 szanse są takie same jak w tabeli.
+function rollMoney(use, balance, bonusPct = 0) {
+  const points = bonusPct * CHEST_SCALE.money;
+  const s = strength(points);
+  const pos = Math.min(s, 100) / 100;
+
+  const fine = use.table.find((e) => e.fine);
+  const nothing = use.table.find((e) => !e.fine && e.min === undefined);
+  const gains = use.table.filter((e) => e.min !== undefined).sort((a, b) => a.min - b.min);
+  const ordered = [fine, nothing, ...gains].filter(Boolean);
+
+  let acc = 0;
+  for (let i = 0; i < ordered.length; i += 1) {
+    const e = ordered[i];
+    if (pos < acc + e.p || i === ordered.length - 1) {
+      if (e.fine) return { kind: 'fine', amount: Math.max(0, Math.min(Math.floor((balance * use.finePct) / 100), e.cap)) };
+      if (e.min === undefined) return { kind: 'nothing', amount: 0 };
+      const f = Math.min(1, Math.max(0, (pos - acc) / e.p));
+      let amount = e.min + (e.max - e.min) * f;
+      if (s > 100) amount *= 1 + (s - 100) / 100; // przebicie: kwota rośnie ponad zakres
+      return { kind: 'gain', amount: Math.round(amount) };
+    }
+    acc += e.p;
+  }
+  return { kind: 'nothing', amount: 0 };
+}
+
+// ---------------- LICZNIK PECHA ----------------
+// Jakość wyniku to jego percentyl (0..1) wśród losowań bez bonusu dla danej skrzyni ('daily' albo id skrzyni).
+// Tablica referencyjna liczona jest raz (próbka), więc zmiana katalogu nie wymaga ręcznej kalibracji.
+const SAMPLE_N = 20000;
+const qualityTables = new Map();
+
+function sampleValue(source) {
+  if (source === 'daily') {
+    const r = rollDailyChest(0);
+    return r.amount + (r.item ? r.item.value : 0);
+  }
+  const item = rollShopChest(CHESTS[source], 0).item;
+  return item ? item.value : 0;
+}
+
+function qualityTable(source) {
+  let table = qualityTables.get(source);
+  if (!table) {
+    table = new Float64Array(SAMPLE_N);
+    withRng(Math.random, () => { for (let i = 0; i < SAMPLE_N; i += 1) table[i] = sampleValue(source); });
+    table.sort();
+    qualityTables.set(source, table);
+  }
+  return table;
+}
+
+function bound(a, v, inclusive) {
+  let lo = 0;
+  let hi = a.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (inclusive ? a[mid] <= v : a[mid] < v) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+}
+
+// Percentyl wyniku: 0 = najgorszy możliwy, 1 = najlepszy
+function quality(source, value) {
+  const a = qualityTable(source);
+  return (bound(a, value, false) + bound(a, value, true)) / 2 / a.length;
+}
+
+// O ile zmienia się licznik pecha po losowaniu o danej wartości (dodatni = pech, ujemny = dobry wynik).
+// Licznik w bazie jest przycinany do 0..1, więc bonus nigdy nie jest ujemny.
+function pityDelta(source, value) {
+  return PITY_STEP * (PITY_THRESHOLD - quality(source, value));
 }
 
 // Data kalendarzowa w Polsce (YYYY-MM-DD), do limitu "raz dziennie"
@@ -351,7 +575,9 @@ function warsawDate(ms = Date.now()) { return WARSAW_DATE.format(new Date(ms)); 
 
 module.exports = {
   TIER_NAMES, TIER_ICONS, ITEMS, CHESTS,
+  MAX_LEVEL, LEVEL_BONUS, COMBO_BONUS, ONCE_BONUS, PITY_MAX, CHEST_SCALE, STRENGTH,
   LUCK_CAP, LUCK_COMBO_BONUS, DAILY_ITEM_CHANCE, DAILY_ITEM_CHANCE_BUDZIK,
-  chance, isChest, getDef, computeLuck, luckyPick, dropItem, dropDailyItem,
-  rollChestContents, pickFromTiers, tierOdds, expectedItemValue, rollMoneyOnce, rollMoney, moneyScore, warsawDate,
+  chance, isChest, getDef, luckBreakdown, totalBonus, pityBonus, luckyPick, dropItem, dropDailyItem,
+  rollDailyChest, rollShopChest, rollChestContents, tierOdds, effectiveTierOdds, expectedItemValue,
+  rollMoneyOnce, rollMoney, moneyScore, pityDelta, quality, withRng, warsawDate,
 };

@@ -2,7 +2,6 @@ const { SlashCommandBuilder, MessageFlags } = require('discord.js');
 const db = require('../db');
 const inv = require('../utils/inventory');
 const items = require('../utils/items');
-const { rollDailyReward, DAILY_TIERS } = require('../utils/economy');
 const { runChestGame, TIER_QUIPS } = require('../utils/chestGame');
 
 // Czas na wybór skrzyni i długość etapu "otwieranie" (.env: CHEST_PICK_TIME_MS / CHEST_FRAME_DELAY_MS)
@@ -27,11 +26,15 @@ module.exports = {
       return;
     }
 
-    const [luck, armed, owned] = await Promise.all([
-      inv.getLuck(guildId, user.id),
+    const [luckInfo, armed, owned, pity] = await Promise.all([
+      inv.getLuckBreakdown(guildId, user.id),
       inv.getArmed(guildId, user.id),
       inv.getOwnedUnique(guildId, user.id),
+      inv.getPity(guildId, user.id, 'daily'),
     ]);
+
+    // Bonus = szczęście (Koniczyna, Podkowa, włączona Koniczynka) + pech (licznik słabych losowań), ze wspólnym limitem
+    const bonus = items.totalBonus(luckInfo.luck, pity);
 
     // Jeden modyfikator skrzyni na odbiór: Latarka albo Zapasowy klucz
     const modifier = armed.daily_mod === 'latarka' ? 'latarka' : armed.daily_mod === 'klucz' ? 'klucz' : null;
@@ -40,16 +43,14 @@ module.exports = {
     // Zawartość wszystkich trzech skrzyń losujemy z góry (kryptograficznym RNG).
     // Skrzynie są niezależne i takie same, więc wybór skrzyni nie zmienia średniej nagrody.
     const makeChest = () => {
-      const reward = items.luckyPick(rollDailyReward, (r) => r.amount, luck);
-      const hasItem = items.chance(Math.min(1, itemChance * (1 + luck / 100)));
-      const item = hasItem ? items.dropDailyItem(owned) : null;
+      const r = items.rollDailyChest(bonus, owned, itemChance);
       return {
-        coins: reward.amount,
-        item,
-        score: reward.amount + (item ? item.value : 0),
-        label: reward.tier.name,
-        color: reward.tier.color,
-        tierIndex: DAILY_TIERS.indexOf(reward.tier),
+        coins: r.amount,
+        item: r.item,
+        score: r.amount + (r.item ? r.item.value : 0),
+        label: r.tier.name,
+        color: r.tier.color,
+        tierIndex: r.tierIndex,
       };
     };
     const chests = [makeChest(), makeChest(), makeChest()];
@@ -57,6 +58,7 @@ module.exports = {
     const consumeKinds = [];
     if (modifier) consumeKinds.push('daily_mod');
     if (armed.daily_item) consumeKinds.push('daily_item');
+    if (armed.luck_once) consumeKinds.push('luck_once'); // Koniczynka zużywa się przy tej skrzyni
 
     await runChestGame({
       send: async (payload) => { await interaction.reply(payload); return interaction.fetchReply(); },
@@ -64,7 +66,7 @@ module.exports = {
       user,
       chests,
       modifier,
-      luck,
+      luck: Math.round(bonus * 10) / 10,
       title: '🎁 Dzienna skrzynia',
       pickTimeMs: PICK_TIME_MS,
       openDelayMs: OPEN_DELAY_MS,
@@ -72,7 +74,9 @@ module.exports = {
       settle: async (selected, extra) => {
         const coins = chests[selected].coins + (extra !== null ? chests[extra].coins : 0);
         const itemIds = [chests[selected].item, extra !== null ? chests[extra].item : null].filter(Boolean).map((i) => i.id);
-        const result = await inv.claimDailyBundle(guildId, user.id, coins, itemIds, consumeKinds);
+        // Licznik pecha oceniamy po wybranej skrzyni (dodatkowa z Klucza nie liczy się)
+        const pityUpdate = { source: 'daily', delta: items.pityDelta('daily', chests[selected].score) };
+        const result = await inv.claimDailyBundle(guildId, user.id, coins, itemIds, consumeKinds, pityUpdate);
         if (!result.claimed) return { ok: false, message: '⏰ Dzisiejsza nagroda została już odebrana. Wróć po północy (00:00).' };
         return { ok: true, balance: result.balance, granted: result.granted };
       },

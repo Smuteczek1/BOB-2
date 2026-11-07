@@ -194,16 +194,18 @@ Poziomy i drabinka ról na razie działają jak dotąd, równolegle do monet.
 **Katalog w jednym pliku:** `utils/items.js` zawiera wszystkie przedmioty, skrzynie, ceny, szanse, wagi i bonusy.
 Dla przedmiotów niepieniężnych pole `value` to tylko szacunek (do liczenia cen i oceny "najgorszej skrzyni").
 
-**Typy przedmiotów:** jednorazowe (`J`), stałe (`S`, tylko Koniczyna i Podkowa, można mieć po jednym) i kolekcjonerskie (`K`).
+**Typy przedmiotów:** jednorazowe (`J`), stałe (`S`, tylko Koniczyna i Podkowa, mają poziomy) i kolekcjonerskie (`K`, można mieć po jednym).
 
-**Szczęście** (Koniczynka, Koniczyna, Podkowa): z szansą równą szczęściu losujesz dwa razy i bierzesz lepszy wynik.
-Ta sama rodzina się nie sumuje (działa najsilniejsza), różne się sumują, a Koniczyna razem z Podkową dają dodatkowe +2%.
-Górny limit to +15%. Szczęście **nie działa** w kasynie ani w loterii.
+**Jak losowana jest zawartość skrzyni:** najpierw poziom rzadkości (wagi skrzyni), potem **siła losowania** (liczba 0-100,00 z rzadkim "przebiciem" do 130). W obrębie poziomu siła decyduje, jak dobry jest przedmiot (słabszy lub mocniejszy) albo jak duża jest kwota monet. Siła ponad 100 daje dodatkową szansę na awans o jeden poziom, a kwota rośnie dalej. Przedmioty stałe i kolekcjonerskie mają stałą szansę niezależną od siły. Wszystkie liczby (przebicie, awans, przeliczniki) są na górze `utils/items.js` (`STRENGTH`, `CHEST_SCALE`).
+
+**Szczęście** (stałe, działa ZAWSZE, bez używania): **Koniczyna** i **Podkowa** mają poziomy 1-5. Kolejna sztuka z tej samej rodziny nie wypada jako dublet, tylko podnosi poziom (ilość w ekwipunku = poziom, po poziomie 5 przedmiot przestaje wypadać). Bonus: poziom 1-5 daje +2/+4/+6/+8/+10% (poziomy się nie sumują, liczy się aktualny). Koniczyna razem z Podkową dają dodatkowe +4%. **Koniczynka** (jednorazowa) daje +10% na następną skrzynię (dzienną albo ze sklepu), zużywa się przy jej otwarciu i sumuje się ze stałym szczęściem. Szczęście i pech razem mają limit +30%. Szczęście **nie działa** w kasynie ani w loterii. W `/ekwipunek` widać rozpisany bonus, a w `/sklep` szanse poziomów z uwzględnieniem Twojego bonusu.
+
+**Pech (ochrona przed złą serią):** dla każdego rodzaju skrzyni (dzienna, Brązowa, Srebrna, Złota) jest osobny licznik 0-1 (tabela `user_pity`). Słabe losowanie (poniżej 40. percentyla tej skrzyni) podnosi licznik, dobre mocno go obniża. Licznik daje do +10% bonusu (nigdy ujemnego) przy następnej skrzyni tego rodzaju. Wartości: `PITY_MAX`, `PITY_THRESHOLD`, `PITY_STEP` w `utils/items.js`.
 
 **Modyfikatory dziennej skrzyni:** Latarka (najgorsza z trzech odpada) i Zapasowy klucz (otwierasz też lepszą z reszty).
 Jeden modyfikator na odbiór. Budzik Boba pozwala odebrać dzienną skrzynię drugi raz.
 
-**Przedmioty pieniężne** (Teczka ... Czarna Skrzynka): nic, suma albo mandat (10% salda, z limitem; nigdy poniżej zera).
+**Przedmioty pieniężne** (Teczka ... Czarna Skrzynka): nic, suma albo mandat (10% salda, z limitem; nigdy poniżej zera). Stałe szczęście zwiększa szanse na większe wygrane i zmniejsza szansę na mandat (przelicznik `CHEST_SCALE.money`).
 
 **Polisy** (Mała/Boba/Wielka): włączasz przed grą w kasynie; po przegranej jest szansa na zwrot straty do limitu.
 Zużywają się przy tej jednej grze, a zwrot jest liczony w tej samej transakcji co rozliczenie gry.

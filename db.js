@@ -97,7 +97,7 @@ const RESET_TARGETS = {
         SELECT user_id, item_id, quantity FROM inventory
         WHERE guild_id = $1 AND ($2::text IS NULL OR user_id = $2) FOR UPDATE
       `, [guildId, userId])).rows;
-      for (const table of ['inventory', 'user_boosts', 'user_armed', 'item_daily_use']) {
+      for (const table of ['inventory', 'user_boosts', 'user_armed', 'item_daily_use', 'user_pity']) {
         await client.query(`DELETE FROM ${table} WHERE guild_id = $1 AND ($2::text IS NULL OR user_id = $2)`, [guildId, userId]);
       }
       return {
@@ -413,6 +413,15 @@ async function initDb() {
         item_id TEXT NOT NULL,
         use_date TEXT NOT NULL,
         PRIMARY KEY (guild_id, user_id, item_id)
+      );
+
+      -- Licznik pecha (0..1), osobny dla każdego rodzaju skrzyni: source = 'daily' albo id skrzyni ze sklepu
+      CREATE TABLE IF NOT EXISTS user_pity (
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        meter DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (meter >= 0 AND meter <= 1),
+        PRIMARY KEY (guild_id, user_id, source)
       );
     `);
 

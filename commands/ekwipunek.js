@@ -28,7 +28,7 @@ const KIND_LABEL = { consumable: 'jednorazowy', permanent: 'stały', collectible
 const isMoneyItem = (def) => def?.use?.type === 'money';
 const GAIN_COLOR = 0x2ecc71; // kolor wyniku "wygrana" zwracany przez useItem
 
-const minutesLeft = (ms) => Math.max(1, Math.ceil((ms - Date.now()) / 60000));
+const fmtPct = (x) => String(Math.round(x * 10) / 10).replace('.', ',');
 const nameOf = (user) => user.displayName ?? user.username;
 const small = () => new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small);
 
@@ -44,7 +44,7 @@ function collectEntries(inventory) {
     .filter((i) => !items.isChest(i.itemId) && items.ITEMS[i.itemId])
     .sort((a, b) => items.ITEMS[b.itemId].tier - items.ITEMS[a.itemId].tier);
   const usable = owned
-    .filter((r) => items.ITEMS[r.itemId].kind !== 'collectible')
+    .filter((r) => items.ITEMS[r.itemId].kind !== 'collectible' && !items.ITEMS[r.itemId].luckFamily)
     .map((r) => ({ type: 'item', def: items.ITEMS[r.itemId], qty: r.quantity }));
   const collection = owned
     .filter((r) => items.ITEMS[r.itemId].kind === 'collectible')
@@ -62,11 +62,11 @@ function entryText(e) {
 
 // banner: tekst wyniku ostatniej akcji (albo null); page: numer strony (od 0); disabled: wyłącza przyciski po czasie
 async function buildView(guildId, user, { banner = null, page = 0, disabled = false } = {}) {
-  const [inventory, boosts, armed, luck] = await Promise.all([
+  const [inventory, armed, luckInfo, pityMap] = await Promise.all([
     inv.getInventory(guildId, user.id),
-    inv.getBoosts(guildId, user.id),
     inv.getArmed(guildId, user.id),
-    inv.getLuck(guildId, user.id),
+    inv.getLuckBreakdown(guildId, user.id),
+    inv.getAllPity(guildId, user.id),
   ]);
 
   const { entries, collection } = collectEntries(inventory);
@@ -75,8 +75,16 @@ async function buildView(guildId, user, { banner = null, page = 0, disabled = fa
   const slice = entries.slice(current * ROWS_PER_PAGE, (current + 1) * ROWS_PER_PAGE);
 
   const active = [];
-  for (const b of boosts) active.push(`🍀 Szczęście (${b.family}): +${b.value}% · jeszcze ok. ${minutesLeft(b.expiresAt)} min`);
-  if (boosts.length) active.push(`➡️ Razem: **+${luck}%** (limit +${items.LUCK_CAP}%)`);
+  if (luckInfo.koniczynaLevel > 0) active.push(`🍀 Koniczyna, poziom ${luckInfo.koniczynaLevel}/${items.MAX_LEVEL}: +${luckInfo.koniczyna}%`);
+  if (luckInfo.podkowaLevel > 0) active.push(`🐴 Podkowa, poziom ${luckInfo.podkowaLevel}/${items.MAX_LEVEL}: +${luckInfo.podkowa}%`);
+  if (luckInfo.combo > 0) active.push(`✨ Komplet Koniczyna + Podkowa: +${luckInfo.combo}%`);
+  if (luckInfo.once > 0) active.push(`🍀 Koniczynka: +${luckInfo.once}% (zużyje się przy następnej skrzyni)`);
+  if (luckInfo.raw > 0) active.push(`➡️ Szczęście razem: **+${luckInfo.luck}%** (limit +${items.LUCK_CAP}%, razem z pechem)`);
+  const pityLines = Object.entries(pityMap)
+    .map(([source, meter]) => ({ source, bonus: items.pityBonus(meter) }))
+    .filter((p) => p.bonus >= 0.1)
+    .map((p) => `${p.source === 'daily' ? 'dzienna' : (items.CHESTS[p.source]?.name ?? p.source)} +${fmtPct(p.bonus)}%`);
+  if (pityLines.length) active.push(`🌧️ Pech (pomoc po słabych losowaniach): ${pityLines.join(' · ')}`);
   if (armed.daily_mod) { const d = items.ITEMS[armed.daily_mod]; active.push(`${d.emoji} ${d.name}: zadziała przy następnym \`/nagroda\``); }
   if (armed.daily_item) active.push('⏰ Budzik: następna dzienna skrzynia ma większą szansę na przedmiot');
   if (armed.polisa) { const d = items.ITEMS[armed.polisa]; active.push(`${d.emoji} ${d.name}: zadziała w następnej grze w kasynie`); }
@@ -212,8 +220,18 @@ async function openChest(interaction, guildId, user, chest) {
   const have = (await inv.getInventory(guildId, user.id)).find((r) => r.itemId === chest.id);
   if (!have) return '❌ **Nie masz już tej skrzyni**';
 
-  const [luck, owned] = await Promise.all([inv.getLuck(guildId, user.id), inv.getOwnedUnique(guildId, user.id)]);
-  const rolled = items.rollChestContents(chest, luck, owned); // { coins, item }
+  const [luckInfo, owned, pity] = await Promise.all([
+    inv.getLuckBreakdown(guildId, user.id),
+    inv.getOwnedUnique(guildId, user.id),
+    inv.getPity(guildId, user.id, chest.id),
+  ]);
+  const bonus = items.totalBonus(luckInfo.luck, pity); // szczęście + pech
+  const rolled = items.rollChestContents(chest, bonus, owned); // { coins, item }
+  // Koniczynka zużywa się przy otwarciu skrzyni; licznik pecha dotyczy tylko skrzyń ze sklepu (nie starych)
+  const settleExtra = {
+    consumeKinds: luckInfo.once > 0 ? ['luck_once'] : [],
+    pity: chest.tiers && rolled.item ? { source: chest.id, delta: items.pityDelta(chest.id, rolled.item.value) } : null,
+  };
 
   let res;
   try {
@@ -224,18 +242,20 @@ async function openChest(interaction, guildId, user, chest) {
       name: chest.name,
       openDelayMs: OPEN_DELAY_MS,
       settle: async () => {
-        const s = await inv.settleChestOpen(guildId, user.id, chest.id, rolled.coins, rolled.item ? [rolled.item.id] : []);
+        const s = await inv.settleChestOpen(guildId, user.id, chest.id, rolled.coins, rolled.item ? [rolled.item.id] : [], settleExtra);
         if (!s.ok) return { ok: false, message: '❌ Tej skrzyni już nie ma w Twoim ekwipunku.' };
 
         const lines = [];
         if (rolled.coins > 0) lines.push(`Zyskujesz: ${formatCoins(rolled.coins)}`);
         if (rolled.item) {
+          const level = s.levels?.[rolled.item.id];
           lines.push(s.granted.includes(rolled.item.id)
-            ? `🎁 Do ekwipunku: ${rolled.item.emoji} **${rolled.item.name}**`
-            : `ℹ️ ${rolled.item.name}: już to masz (stały przedmiot, pominięty).`);
+            ? `🎁 Do ekwipunku: ${rolled.item.emoji} **${rolled.item.name}**${level ? ` ⬆️ poziom ${level}/${rolled.item.maxLevel}` : ''}`
+            : `ℹ️ ${rolled.item.name}: już to masz (pominięty).`);
         }
         if (!rolled.coins && !rolled.item) lines.push('W środku pusto.');
         if (rolled.coins > 0) lines.push(`Saldo: ${formatCoins(s.balance)}`);
+        if (bonus > 0) lines.push(`*🍀 Bonus w tej skrzyni: +${fmtPct(bonus)}%*`);
 
         return {
           ok: true,

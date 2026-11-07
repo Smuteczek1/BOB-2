@@ -31,8 +31,7 @@ async function useItem(guildId, userId, itemId) {
     switch (def.use.type) {
       case 'money': return await useMoney(guildId, userId, def);
       case 'ticket': return await useTicket(guildId, userId, def);
-      case 'boost': return await useBoost(guildId, userId, def);
-      case 'boost_daily': return await useBoostDaily(guildId, userId, def);
+      case 'arm_luck': return await useArmLuck(guildId, userId, def);
       case 'arm_daily': return await useArmDaily(guildId, userId, def);
       case 'budzik': return await useBudzik(guildId, userId, def);
       case 'polisa': return await usePolisa(guildId, userId, def);
@@ -51,7 +50,9 @@ async function requireItem(c, guildId, userId, itemId) {
 
 // ---- Teczka, Aktówka, Walizka, Sejf, Skarbiec, Kufer, Czarna Skrzynka ----
 async function useMoney(guildId, userId, def) {
-  const luck = await inv.getLuck(guildId, userId);
+  // Jednorazowa Koniczynka działa tylko na skrzynie (zużywa się przy ich otwarciu), więc tu liczy się samo szczęście stałe
+  const lb = await inv.getLuckBreakdown(guildId, userId);
+  const luck = Math.min(items.LUCK_CAP, lb.raw - lb.once);
   return db.withTransaction(async (c) => {
     await requireItem(c, guildId, userId, def.id);
 
@@ -117,64 +118,23 @@ async function useTicket(guildId, userId, def) {
   });
 }
 
-// ---- Koniczynka (jednorazowa) ----
-async function useBoost(guildId, userId, def) {
+// ---- Koniczynka: bonus szczęścia na NASTĘPNĄ skrzynię (dzienną albo ze sklepu) ----
+// Zużywa się przy otwarciu skrzyni (w tej samej transakcji, patrz inventory.settleChestOpen / claimDailyBundle).
+// Koniczyna i Podkowa (stałe) nie wymagają użycia, działają same.
+async function useArmLuck(guildId, userId, def) {
   return db.withTransaction(async (c) => {
-    const active = await c.query(
-      'SELECT expires_at FROM user_boosts WHERE guild_id = $1 AND user_id = $2 AND family = $3 AND expires_at > $4::bigint',
-      [guildId, userId, def.use.family, Date.now()],
-    );
-    if (active.rowCount > 0) {
-      const mins = Math.ceil((Number(active.rows[0].expires_at) - Date.now()) / 60000);
-      throw new Refused(`Masz już aktywne szczęście z tej rodziny (jeszcze ok. ${mins} min). Przedmiot nie został zużyty.`);
-    }
+    const armed = await c.query(`
+      INSERT INTO user_armed (guild_id, user_id, kind, item_id, armed_at) VALUES ($1, $2, 'luck_once', $3, $4::bigint)
+      ON CONFLICT (guild_id, user_id, kind) DO NOTHING RETURNING item_id
+    `, [guildId, userId, def.id, Date.now()]);
+    if (armed.rowCount === 0) throw new Refused('Masz już włączoną Koniczynkę. Zadziała przy następnej skrzyni. Przedmiot nie został zużyty.');
+
     await requireItem(c, guildId, userId, def.id);
-    return startBoost(c, guildId, userId, def);
+    return ok(`${def.emoji} ${def.name} gotowa`, [
+      `+${def.use.bonus}% szczęścia przy **następnej skrzyni** (dziennej albo ze sklepu). Sumuje się ze stałym szczęściem.`,
+      'Nie działa w kasynie ani loterii.',
+    ], 0x2ecc71);
   });
-}
-
-// ---- Koniczyna i Podkowa (stałe, raz dziennie) ----
-async function useBoostDaily(guildId, userId, def) {
-  return db.withTransaction(async (c) => {
-    const owned = await c.query('SELECT quantity FROM inventory WHERE guild_id = $1 AND user_id = $2 AND item_id = $3 AND quantity > 0', [guildId, userId, def.id]);
-    if (owned.rowCount === 0) throw new Refused('Nie masz już tego przedmiotu.');
-
-    const active = await c.query(
-      'SELECT expires_at FROM user_boosts WHERE guild_id = $1 AND user_id = $2 AND family = $3 AND expires_at > $4::bigint',
-      [guildId, userId, def.use.family, Date.now()],
-    );
-    if (active.rowCount > 0) {
-      const mins = Math.ceil((Number(active.rows[0].expires_at) - Date.now()) / 60000);
-      throw new Refused(`Szczęście z tej rodziny już działa (jeszcze ok. ${mins} min).`);
-    }
-
-    // Limit "raz na dobę (czas polski)": zapis udaje się tylko, jeśli dziś jeszcze nie użyto
-    const today = items.warsawDate();
-    const used = await c.query(`
-      INSERT INTO item_daily_use (guild_id, user_id, item_id, use_date) VALUES ($1, $2, $3, $4)
-      ON CONFLICT (guild_id, user_id, item_id) DO UPDATE SET use_date = EXCLUDED.use_date
-      WHERE item_daily_use.use_date <> EXCLUDED.use_date
-      RETURNING item_id
-    `, [guildId, userId, def.id, today]);
-    if (used.rowCount === 0) throw new Refused('Już dziś go używałeś/aś. Odnowi się po północy (00:00).');
-
-    return startBoost(c, guildId, userId, def);
-  });
-}
-
-async function startBoost(c, guildId, userId, def) {
-  let minutes = def.use.minutes;
-  const extended = def.bonus?.extendMinutes && items.chance(def.bonus.chance);
-  if (extended) minutes = def.bonus.extendMinutes;
-
-  await c.query(`
-    INSERT INTO user_boosts (guild_id, user_id, family, value, expires_at) VALUES ($1, $2, $3, $4, $5::bigint)
-    ON CONFLICT (guild_id, user_id, family) DO UPDATE SET value = EXCLUDED.value, expires_at = EXCLUDED.expires_at
-  `, [guildId, userId, def.use.family, def.use.value, Date.now() + minutes * 60000]);
-
-  const lines = [`🍀 +${def.use.value}% szczęścia przez **${minutes} min**.`, 'Działa na skrzynie, szansę na przedmioty i napad. Nie działa w kasynie ani loterii.'];
-  if (extended) lines.push('🎁 **Bonus!** Działa dłużej niż zwykle.');
-  return ok(`${def.emoji} ${def.name}`, lines, 0x2ecc71);
 }
 
 // ---- Latarka i Zapasowy klucz: modyfikator NASTĘPNEJ dziennej skrzyni ----
