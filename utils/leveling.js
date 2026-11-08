@@ -121,4 +121,5 @@ module.exports = {
   grantTextXp,
   tickVoiceXp,
   randomInt,
+  announceIfMilestone,
 };

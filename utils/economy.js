@@ -31,6 +31,10 @@ const REASON_LABELS = {
   chest_open: 'Otwarcie skrzyni',
   mandat: 'Mandat',
   reset: 'Reset salda',
+  market_buy: 'Rynek: kupno',
+  market_sale: 'Rynek: sprzedaż',
+  market_return_fallback: 'Rynek: rekompensata',
+  work_benefit: 'Praca: zasiłek',
 };
 
 // ============================================================
@@ -71,8 +75,12 @@ function rollDailyReward() {
 
 function reasonLabel(reason) {
   if (REASON_LABELS[reason]) return REASON_LABELS[reason];
-  // Powody tworzone dynamicznie przez sklep i przedmioty (wczytywane leniwie, żeby uniknąć pętli importów)
+  // Powody tworzone dynamicznie przez sklep, przedmioty i prace (wczytywane leniwie, żeby uniknąć pętli importów)
   try {
+    if (reason.startsWith('work_')) {
+      const job = require('./jobs').JOBS[reason.slice(5)];
+      if (job) return `Praca: ${job.name}`;
+    }
     const { ITEMS, CHESTS } = require('./items');
     if (reason.startsWith('shop_') && CHESTS[reason.slice(5)]) return `Sklep: ${CHESTS[reason.slice(5)].name}`;
     if (reason.startsWith('item_') && ITEMS[reason.slice(5)]) return `Przedmiot: ${ITEMS[reason.slice(5)].name}`;

@@ -96,6 +96,7 @@ npm start
 | `/nagroda` | Dzienna nagroda: wybierasz jedną z trzech skrzyń (reset o północy, czas polski) | Wszyscy |
 | `/sklep` | Sklep Boba: kup skrzynię (przedmioty wypadają tylko ze skrzyń) | Wszyscy |
 | `/rynek` | Rynek graczy: kupuj i sprzedawaj przedmioty (prowizja 5%) | Wszyscy |
+| `/praca` | Praca: zmiany czasowe i mini-gry, awanse, energia, zasiłek | Wszyscy |
 | `/ekwipunek` | Twoje przedmioty i skrzynie; przy każdej pozycji przycisk Otwórz/Użyj (lista dzieli się na strony) | Wszyscy |
 | `/cclear kanal ilosc:<liczba/all> [uzytkownik]` | Usuwa wiadomości z bieżącego kanału | Zarządzanie wiadomościami |
 | `/cclear uzytkownik uzytkownik:<user> okres:<...>` | Usuwa wiadomości danego użytkownika ze WSZYSTKICH kanałów, z ostatnich X godzin | Zarządzanie wiadomościami |
@@ -352,3 +353,12 @@ a nowe kolumny dodawane są bezpiecznie (`IF NOT EXISTS`), więc aktualizacja ni
 Bot obsługuje wiele serwerów jednocześnie — każda konfiguracja (`guild_config`)
 oraz statystyki (`sessions`) są przechowywane osobno dla każdego `guild_id`,
 więc możesz dodać bota do wielu serwerów bez żadnych konfliktów.
+
+### Prace (`/praca`)
+- 14 prac na poziomach serwerowych 0-50 (od sprzątacza do architekta), każda z 5 stopniami kariery (staż liczony osobno dla każdej pracy; wyższy stopień = wyższa wypłata, do ×1.9).
+- Dwa tryby: **zmiana czasowa** (start, potem odbiór po 30-90 min) i **zadanie** (mini-gra z 3 rund: pamięć, rachunki albo dopasowanie; wypłata ×0.7-×1.3, bez grzywien).
+- Praca daje **XP serwerowe** (zadanie +20%), więc awans na wyższe prace jest osiągalny.
+- Energia: 100 dziennie, każda praca kosztuje 20-33, odnawia się o północy (czas polski).
+- Oferty: 4 losowe prace dziennie (inne dla każdego gracza), zmiana pracy raz dziennie.
+- Zasiłek dla bezrobotnych (60 🪙): po jego odebraniu danego dnia nie można pracować.
+- Zmienne opcjonalne: `WORK_ENERGY_MAX`, `WORK_BENEFIT`. Tabele tworzą się same przy pierwszym użyciu.
