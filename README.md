@@ -356,7 +356,7 @@ więc możesz dodać bota do wielu serwerów bez żadnych konfliktów.
 
 ### Prace (`/praca`)
 - 14 prac na poziomach serwerowych 0-50 (od sprzątacza do architekta), każda z 5 stopniami kariery (staż liczony osobno dla każdej pracy; wyższy stopień = wyższa wypłata, do ×1.9).
-- Trzy sposoby pracy: **zmiana czasowa** (start, odbiór po 30-90 min), **zadanie** (mini-gra z 3 rund: pamięć, rachunki albo dopasowanie; wypłata ×0.7-×1.3, bez grzywien) i **zlecenia** (co godzinę nowa lista: łatwe 1 runda, średnie 2, trudne 3).
+- Trzy sposoby pracy: **zmiana czasowa** (start, odbiór po 30-90 min), **zadanie** (mini-gra z 3 rund: pamięć, rachunki albo dopasowanie; wypłata ×0.7-×1.3, bez grzywien) i **zlecenia**: co godzinę każdy dostaje 3 losowe zlecenia z różnych tematów (budowlane, ogrodnicze, porządkowe, magazynowe, gastronomiczne, sklepowe, kawiarniane, projektowe, serwisowe, elektryczne, informatyczne), każde to mini-gra na 1-3 rundy. Zlecenia **nie zależą od zawodu** (może je robić też bezrobotny), nagroda zależy od poziomu serwerowego i nie liczy się do kariery. Każde zlecenie tylko raz, nowa lista o pełnej godzinie.
 - Zadania i zlecenia mają **przerwę 10 minut** między sobą (`WORK_TASK_COOLDOWN_MIN`).
 - Praca daje **XP serwerowe** (zadanie +20%), więc awans na wyższe prace jest osiągalny.
 - **Energia** regeneruje się ciągle: 5 na godzinę (`WORK_ENERGY_REGEN`), maksimum 100 (`WORK_ENERGY_MAX`), bez resetu o północy. Zmiana kosztuje 20-33, zlecenie 8-20.

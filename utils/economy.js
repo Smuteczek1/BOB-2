@@ -35,6 +35,7 @@ const REASON_LABELS = {
   market_sale: 'Rynek: sprzedaż',
   market_return_fallback: 'Rynek: rekompensata',
   work_benefit: 'Praca: zasiłek',
+  work_order: 'Praca: zlecenie',
   skarbonka: 'Skarbonka: odsetki',
 };
 

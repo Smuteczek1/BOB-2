@@ -184,7 +184,7 @@ async function readState(c, guildId, userId, now) {
     boostPay: row.boost_pay,
     boostXp: row.boost_xp,
     orderSlot: Math.floor(now / 3_600_000),
-    orders: row.job_id ? ordersFor(row.job_id, career.rows, Math.floor(now / 3_600_000), doneOrders.rows.map((r) => Number(r.idx)), row.gear.dyplom) : [],
+    orders: jobs.ordersForSlot(guildId, userId, Math.floor(now / 3_600_000), Number(lvl.rows[0]?.level ?? 0), doneOrders.rows.map((r) => Number(r.idx))),
     offersLevel: row.offers_level,
     // oferty dnia nie zależą od obecnej pracy (lista jest stała w ciągu dnia); widok ukrywa tylko obecną pracę
     offers: jobs.offersFor(guildId, userId, today, row.offers_level, null),
@@ -196,14 +196,6 @@ async function readState(c, guildId, userId, now) {
       ? { id: Number(s.id), mode: s.mode, jobId: s.job_id, startedAt: Number(s.started_at), endsAt: s.ends_at === null ? null : Number(s.ends_at), pay: Number(s.pay), xp: s.xp }
       : null,
   };
-}
-
-// Zlecenia na bieżącą godzinę: po jednym łatwym, średnim i trudnym; nagroda liczona dla obecnego stopnia w pracy
-function ordersFor(jobId, careerRows, slot, doneIdx, promo = 0) {
-  const shifts = Number(careerRows.find((r) => r.job_id === jobId)?.shifts ?? 0);
-  return jobs.ORDER_TIERS.slice(0, jobs.ORDERS_PER_HOUR).map((tier, idx) => ({
-    idx, slot, tier, ...jobs.orderReward(tier, jobId, shifts, promo), done: doneIdx.includes(idx),
-  }));
 }
 
 const getState = (guildId, userId, now = Date.now()) => db.withTransaction((c) => readState(c, guildId, userId, now));
@@ -255,8 +247,8 @@ async function claimBenefit(guildId, userId, now = Date.now()) {
 // ---------------- ZMIANY ----------------
 // Wspólne sprawdzenia przed startem zmiany czasowej, zadania lub zlecenia
 // cost: koszt energii; game: true dla mini-gier (zadanie, zlecenie), które mają przerwę między sobą
-function startChecks(st, now, { cost = null, game = false } = {}) {
-  if (!st.jobId) return { ok: false, reason: 'no_job' };
+function startChecks(st, now, { cost = null, game = false, needJob = true } = {}) {
+  if (needJob && !st.jobId) return { ok: false, reason: 'no_job' };
   if (st.activeShift) return { ok: false, reason: 'shift_active' };
   if (st.benefitTaken) return { ok: false, reason: 'benefit' };
   if (game && st.taskReadyAt > now) return { ok: false, reason: 'cooldown', readyAt: st.taskReadyAt };
@@ -274,10 +266,10 @@ async function beginShift(guildId, userId, kind, now, orderIdx = null) {
     let order = null;
     if (kind === 'order') {
       order = st.orders.find((o) => o.idx === orderIdx);
-      if (!order) return { ok: false, reason: st.jobId ? 'no_order' : 'no_job' };
+      if (!order) return { ok: false, reason: 'no_order' };
       if (order.done) return { ok: false, reason: 'order_done' };
     }
-    const chk = startChecks(st, now, { cost: order ? order.tier.energy : null, game: kind !== 'timed' });
+    const chk = startChecks(st, now, { cost: order ? order.energy : null, game: kind !== 'timed', needJob: !order });
     if (!chk.ok) return chk;
 
     let pay = order ? order.pay : jobs.payFor(job.id, shifts, 1, st.gear.promo); // zadanie mnoży wypłatę potem przez wynik
@@ -285,7 +277,7 @@ async function beginShift(guildId, userId, kind, now, orderIdx = null) {
     // Premia / Szkolenie (jednorazowe) mnożą razem ze stałymi Złotą teczką / Notesem mistrza
     pay = Math.max(1, Math.round(pay * (1 + st.boostPay / 100) * (1 + st.gear.payPct / 100)));
     xp = Math.max(1, Math.round(xp * (1 + st.boostXp / 100) * (1 + st.gear.xpPct / 100)));
-    const rounds = order ? order.tier.rounds : jobs.ROUNDS;
+    const rounds = order ? order.rounds : jobs.ROUNDS;
     const endsAt = kind === 'timed' ? now + job.minutes * 60_000 : null;
     const readyAt = kind === 'timed' ? st.taskReadyAt : now + st.gear.cooldownMin * 60_000;
 
@@ -298,10 +290,10 @@ async function beginShift(guildId, userId, kind, now, orderIdx = null) {
     const ins = await c.query(
       `INSERT INTO work_shifts (guild_id, user_id, job_id, mode, started_at, ends_at, pay, xp, rounds, order_slot, order_idx)
        VALUES ($1, $2, $3, $4, $5::bigint, $6::bigint, $7::bigint, $8, $9, $10::bigint, $11) RETURNING id`,
-      [guildId, userId, job.id, kind === 'timed' ? 'timed' : 'task', now, endsAt, pay, xp, rounds, order?.slot ?? null, order?.idx ?? null],
+      [guildId, userId, order ? `zlec_${order.themeId}` : job.id, kind === 'timed' ? 'timed' : 'task', now, endsAt, pay, xp, rounds, order?.slot ?? null, order?.idx ?? null],
     );
     return {
-      ok: true, shiftId: Number(ins.rows[0].id), jobId: job.id, cost: chk.cost, pay, xp, endsAt, rounds,
+      ok: true, shiftId: Number(ins.rows[0].id), jobId: order ? null : job.id, order, cost: chk.cost, pay, xp, endsAt, rounds,
       energyLeft: st.energyLeft - chk.cost, cooldownMin: st.gear.cooldownMin, readyAt: kind === 'timed' ? null : readyAt,
       boosted: { pay: st.boostPay, xp: st.boostXp },
     };
@@ -315,7 +307,12 @@ const startOrder = (guildId, userId, orderIdx, now = Date.now()) => beginShift(g
 
 // Wypłata zmiany: monety, licznik zmian w pracy (staż) i zamknięcie wpisu w jednej transakcji
 async function settle(c, guildId, userId, shiftRow, pay, now) {
-  const balance = await db.applyCredit(c, guildId, userId, pay, `work_${shiftRow.job_id}`, true);
+  const isOrder = shiftRow.job_id.startsWith('zlec_'); // zlecenie: bez kariery i stopni
+  const balance = await db.applyCredit(c, guildId, userId, pay, isOrder ? 'work_order' : `work_${shiftRow.job_id}`, true);
+  if (isOrder) {
+    await c.query("UPDATE work_shifts SET status = 'done', earned = $2::bigint, closed_at = $3::bigint WHERE id = $1", [shiftRow.id, pay, now]);
+    return { balance, shifts: null, rankUp: null, order: true };
+  }
   const before = Number(
     (await c.query('SELECT shifts FROM work_career WHERE guild_id = $1 AND user_id = $2 AND job_id = $3', [guildId, userId, shiftRow.job_id])).rows[0]?.shifts ?? 0,
   );
@@ -378,7 +375,7 @@ async function finishTask(guildId, userId, shiftId, hits, now = Date.now(), clie
     const mult = jobs.taskMult(h, rounds);
     const pay = Math.max(1, Math.round(Number(s.pay) * mult));
     const out = await settle(c, guildId, userId, s, pay, now);
-    return { ok: true, jobId: s.job_id, pay, xp: s.xp, mode: 'task', hits: h, rounds, mult, ...out };
+    return { ok: true, jobId: s.job_id.startsWith('zlec_') ? null : s.job_id, themeId: s.job_id.startsWith('zlec_') ? s.job_id.slice(5) : null, pay, xp: s.xp, mode: 'task', hits: h, rounds, mult, ...out };
   });
   if (res.ok) res.level = await grantXp(client, guildId, userId, res.xp);
   return res;

@@ -186,4 +186,17 @@ function makeGame(jobId, rng = Math.random) {
   return { kind: job.game, jobId, rounds };
 }
 
-module.exports = { makeGame, checkMemory, PICK_BANK, MEMORY_LENGTHS };
+// Gra do zlecenia: temat (z jobs.ORDER_THEMES) i liczba rund 1-3. Pierwsza runda jest najłatwiejsza.
+function makeOrderGame(theme, rounds = 1, rng = Math.random) {
+  const job = { id: theme.bank ?? theme.id, game: theme.game, math: theme.math, pool: theme.pool };
+  const list = [];
+  const used = new Set();
+  for (let r = 0; r < rounds; r++) {
+    if (job.game === 'memory') list.push(memoryRound(job, r, rng));
+    else if (job.game === 'math') list.push(mathRound(job, r, rng));
+    else list.push(pickRound(job, r, rng, used));
+  }
+  return { kind: job.game, jobId: theme.id, rounds: list };
+}
+
+module.exports = { makeOrderGame, makeGame, checkMemory, PICK_BANK, MEMORY_LENGTHS };

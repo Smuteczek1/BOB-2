@@ -26,13 +26,35 @@ const RANK_MULT = [1, 1.15, 1.35, 1.6, 1.9];
 const TASK_MULT = [0.7, 0.9, 1.1, 1.3];
 const TASK_XP_BONUS = 1.2;
 
-// Zlecenia (co godzinę nowa lista): krótkie mini-gry. rounds = liczba rund, energy = koszt,
-// pay/xp = mnożniki względem wypłaty / XP za zmianę. Trudne zlecenie opłaca się lepiej niż zwykłe zadanie (energia vs wypłata).
-const ORDER_TIERS = [
-  { id: 'easy', name: 'Łatwe', emoji: '🟢', rounds: 1, energy: 8, pay: 0.4, xp: 0.4 },
-  { id: 'medium', name: 'Średnie', emoji: '🟡', rounds: 2, energy: 14, pay: 0.8, xp: 0.75 },
-  { id: 'hard', name: 'Trudne', emoji: '🔴', rounds: 3, energy: 20, pay: 1.3, xp: 1.3 },
-]; // zadanie daje o 20% więcej XP niż zmiana czasowa
+// Zlecenia: co godzinę każdy gracz dostaje 3 losowe zlecenia z różnych tematów (niezależnie od zawodu).
+// Każde to jedna z mini-gier (pamięć / rachunki / dopasowanie) o losowej długości 1-3 rund. Nagroda zależy od POZIOMU serwerowego,
+// nie od pracy, więc zlecenia mogą robić też bezrobotni. Nowa lista pojawia się o pełnej godzinie.
+const ORDER_SIZES = {
+  1: { rounds: 1, energy: 8, pay: 0.4, xp: 0.4 },
+  2: { rounds: 2, energy: 14, pay: 0.8, xp: 0.75 },
+  3: { rounds: 3, energy: 20, pay: 1.3, xp: 1.3 },
+};
+const ORDER_SIZE_WEIGHTS = [30, 40, 30]; // szansa na 1, 2 i 3 rundy (%)
+const ORDER_BASE_PAY = 30; // wypłata bazowa zlecenia przy poziomie 0
+const ORDER_PAY_PER_LEVEL = 8; // + za każdy poziom serwerowy (poziom 50 = 430, jak najlepsza praca)
+const ORDER_BASE_XP = 14;
+const ORDER_XP_PER_LEVEL = 1.2;
+// game: 'memory' | 'math' | 'pick'; math: rodzaj rachunków; pool: emotki do zapamiętania; bank: zestaw pytań (klucz z PICK_BANK)
+const ORDER_THEMES = [
+  { id: 'budowlane', name: 'Budowlane', emoji: '🏗️', game: 'memory', pool: ['🔨', '🪚', '🧱', '🪜', '🔧', '⛏️'], titles: ['Remont łazienki', 'Garaż na działce', 'Mur wokół ogrodu', 'Dach na altance'] },
+  { id: 'ogrodnicze', name: 'Ogrodnicze', emoji: '🌱', game: 'memory', pool: ['🌱', '🌷', '🌳', '🪴', '🌻', '🥕'], titles: ['Nowy trawnik', 'Rabata przed domem', 'Warzywnik za płotem', 'Przycinanie żywopłotu'] },
+  { id: 'porzadki', name: 'Porządkowe', emoji: '🧹', game: 'memory', pool: ['🧽', '🧴', '🪣', '🧹', '🧻', '🗑️'], titles: ['Sprzątanie biura', 'Porządki po imprezie', 'Mycie okien', 'Generalne porządki'] },
+  { id: 'magazynowe', name: 'Magazynowe', emoji: '📦', game: 'math', math: 'boxes', titles: ['Rozładunek ciężarówki', 'Inwentaryzacja półek', 'Palety do wysyłki', 'Pakowanie zamówień'] },
+  { id: 'gastro', name: 'Gastronomiczne', emoji: '🍳', game: 'math', math: 'recipe', titles: ['Catering na wesele', 'Obiady dla firmy', 'Przepis na większą ekipę', 'Kuchnia na festiwalu'] },
+  { id: 'sklepowe', name: 'Sklepowe', emoji: '🛒', game: 'math', math: 'change', titles: ['Zmiana przy kasie', 'Wyprzedaż w sklepie', 'Kasa na targu', 'Sobota w supermarkecie'] },
+  { id: 'kawiarniane', name: 'Kawiarniane', emoji: '☕', game: 'math', math: 'coffee', titles: ['Poranny szczyt w kawiarni', 'Kawa na konferencję', 'Nowa karta kaw', 'Barista na evencie'] },
+  { id: 'projektowe', name: 'Projektowe', emoji: '📐', game: 'math', math: 'area', titles: ['Projekt mieszkania', 'Kosztorys podłogi', 'Plan działki', 'Przeliczenie powierzchni'] },
+  { id: 'serwisowe', name: 'Serwisowe', emoji: '🔧', game: 'pick', bank: 'mechanik', titles: ['Awaria w warsztacie', 'Przegląd auta', 'Naprawa roweru', 'Diagnoza usterki'] },
+  { id: 'elektryczne', name: 'Elektryczne', emoji: '⚡', game: 'pick', bank: 'elektryk', titles: ['Nowa instalacja', 'Wymiana gniazdek', 'Awaria bezpiecznika', 'Oświetlenie sklepu'] },
+  { id: 'it', name: 'Informatyczne', emoji: '💻', game: 'pick', bank: 'programista', titles: ['Błąd na produkcji', 'Nowa strona firmowa', 'Poprawka w aplikacji', 'Wsparcie techniczne'] },
+];
+const ORDER_THEME_BY_ID = Object.fromEntries(ORDER_THEMES.map((t) => [t.id, t]));
+// zadanie daje o 20% więcej XP niż zmiana czasowa
 
 // game: silnik mini-gry ('memory' pamięć, 'math' rachunki, 'pick' dopasuj odpowiedź)
 // math: rodzaj zadań rachunkowych (tylko dla game 'math')
@@ -143,8 +165,15 @@ const taskMult = (hits, rounds = ROUNDS) => {
 };
 const maxEnergy = (chairLevel = 0) => ENERGY_MAX + CHAIR_PER_LEVEL * Math.max(0, chairLevel);
 const regenPerHour = (espressoLevel = 0) => ENERGY_REGEN + ESPRESSO_PER_LEVEL * Math.max(0, espressoLevel);
-// Wypłata i XP zlecenia dla gracza na jego obecnym stopniu (shifts = zmiany w tej pracy)
-const orderReward = (tier, jobId, shifts, promo = 0) => ({ pay: payFor(jobId, shifts, tier.pay, promo), xp: Math.max(1, Math.round(JOBS[jobId].xp * tier.xp)) });
+// Wypłata i XP zlecenia o danej liczbie rund (1-3) dla poziomu serwerowego gracza (bez pracy)
+const orderReward = (rounds, level) => {
+  const size = ORDER_SIZES[rounds];
+  const lv = Math.max(0, Math.floor(level));
+  return {
+    pay: Math.max(1, Math.round((ORDER_BASE_PAY + ORDER_PAY_PER_LEVEL * lv) * size.pay)),
+    xp: Math.max(1, Math.round((ORDER_BASE_XP + ORDER_XP_PER_LEVEL * lv) * size.xp)),
+  };
+};
 
 // ---------------- LOSOWOŚĆ POWTARZALNA (oferty dnia) ----------------
 function hashSeed(str) {
@@ -192,7 +221,24 @@ function offersFor(guildId, userId, dayKey, offersLevel, currentJobId = null) {
   return shuffled(result, rng).map((j) => j.id);
 }
 
+// Zlecenia na daną godzinę (slot = godzina od epoki): 3 różne tematy, losowa długość. Takie same przy każdym odczycie w tej godzinie.
+// level = poziom serwerowy (do nagrody), doneIdx = numery już wykonanych zleceń.
+function ordersForSlot(guildId, userId, slot, level, doneIdx = []) {
+  const rng = seededRng(`${guildId}:${userId}:orders:${slot}`);
+  const themes = shuffled(ORDER_THEMES, rng).slice(0, ORDERS_PER_HOUR);
+  return themes.map((theme, idx) => {
+    const roll = rng() * 100;
+    const rounds = roll < ORDER_SIZE_WEIGHTS[0] ? 1 : roll < ORDER_SIZE_WEIGHTS[0] + ORDER_SIZE_WEIGHTS[1] ? 2 : 3;
+    const title = theme.titles[Math.floor(rng() * theme.titles.length)];
+    return { idx, slot, themeId: theme.id, theme, title, rounds, energy: ORDER_SIZES[rounds].energy, ...orderReward(rounds, level), done: doneIdx.includes(idx) };
+  });
+}
+
 module.exports = {
+  ORDER_SIZES,
+  ORDER_THEMES,
+  ORDER_THEME_BY_ID,
+  ordersForSlot,
   ENERGY_MAX,
   ENERGY_REGEN,
   CHAIR_PER_LEVEL,
@@ -205,7 +251,6 @@ module.exports = {
   PROMO_PER_LEVEL,
   BATTERY_PER_LEVEL,
   needShifts,
-  ORDER_TIERS,
   maxEnergy,
   regenPerHour,
   orderReward,

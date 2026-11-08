@@ -144,7 +144,7 @@ async function mainView(session, box, st, disabled) {
   );
   box.addActionRowComponents(
     new ActionRowBuilder().addComponents(
-      btn('pr_orders', 'Zlecenia', ButtonStyle.Primary, { emoji: '📋', disabled: disabled || !job }),
+      btn('pr_orders', 'Zlecenia', ButtonStyle.Primary, { emoji: '📋', disabled }),
       btn('pr_offers', 'Oferty pracy', ButtonStyle.Secondary, { emoji: '🔎', disabled }),
       btn('pr_items', 'Przedmioty', ButtonStyle.Secondary, { emoji: '🎒', disabled }),
       btn('pr_refresh', 'Odśwież', ButtonStyle.Secondary, { emoji: '🔄', disabled }),
@@ -204,23 +204,26 @@ async function offersView(session, box, st, disabled) {
 }
 
 function ordersView(session, box, st, disabled) {
-  const job = st.jobId ? jobs.JOBS[st.jobId] : null;
   const next = (st.orderSlot + 1) * 3_600_000;
   box.addTextDisplayComponents(
-    text(`## 📋 Zlecenia\n-# Nowa lista <t:${ts(next)}:R> (co godzinę). Każde zlecenie to krótka mini-gra (${job ? GAME_NAMES[job.game] : '—'}). Przerwa między grami: ${st.gear.cooldownMin} min.`),
+    text(
+      `## 📋 Zlecenia\n-# Każdy dostaje co godzinę 3 losowe zlecenia o różnych tematach, niezależnie od zawodu. Nagroda zależy od twojego poziomu serwerowego (**${st.level}**). ` +
+      `Nowa lista <t:${ts(next)}:R>. Przerwa między grami: ${st.gear.cooldownMin} min.`,
+    ),
   );
   box.addSeparatorComponents(sep());
-  const waiting = st.taskReadyAt > Date.now();
-  if (waiting) box.addTextDisplayComponents(text(`-# ⏳ Przerwa: następna mini-gra <t:${ts(st.taskReadyAt)}:R>`));
+  if (st.taskReadyAt > Date.now()) box.addTextDisplayComponents(text(`-# ⏳ Przerwa: następna mini-gra <t:${ts(st.taskReadyAt)}:R>`));
+  const busy = Boolean(st.activeShift);
   for (const o of st.orders) {
-    const busy = Boolean(st.activeShift);
-    const noEnergy = st.energyLeft < o.tier.energy;
+    const noEnergy = st.energyLeft < o.energy;
+    const maxPay = Math.round(o.pay * jobs.TASK_MULT[3] * (1 + st.gear.payPct / 100));
+    const maxXp = Math.round(o.xp * jobs.TASK_XP_BONUS * (1 + st.gear.xpPct / 100));
     box.addSectionComponents(
       new SectionBuilder()
         .addTextDisplayComponents(
           text(
-            `${o.done ? '✅' : o.tier.emoji} **${o.tier.name} zlecenie** · ${o.tier.rounds} ${o.tier.rounds === 1 ? 'runda' : 'rundy'}\n` +
-            `-# ⚡ ${o.tier.energy} · do ${coin(Math.round(o.pay * jobs.TASK_MULT[3]))} · do **${Math.round(o.xp * jobs.TASK_XP_BONUS)} XP**${o.done ? ' · wykonane' : ''}`,
+            `${o.done ? '✅' : o.theme.emoji} **${o.title}** · ${o.theme.name.toLowerCase()}\n` +
+            `-# ${GAME_NAMES[o.theme.game]} · ${o.rounds} ${o.rounds === 1 ? 'runda' : 'rundy'} · ⚡ ${o.energy} · do ${coin(maxPay)} · do **${maxXp} XP**${o.done ? ' · wykonane' : ''}`,
           ),
         )
         .setButtonAccessory(
@@ -231,7 +234,7 @@ function ordersView(session, box, st, disabled) {
         ),
     );
   }
-  if (!job) box.addTextDisplayComponents(text('_Najpierw znajdź pracę w „Oferty pracy”._'));
+  if (st.orders.every((o) => o.done)) box.addTextDisplayComponents(text(`_Wszystkie zlecenia wykonane. Nowe pojawią się <t:${ts(next)}:R>._`));
   box.addActionRowComponents(new ActionRowBuilder().addComponents(btn('pr_back', 'Wróć', ButtonStyle.Secondary, { emoji: '◀️', disabled })));
 }
 
@@ -258,10 +261,10 @@ async function itemsView(session, box, st, disabled) {
 
 function gameView(session, box, st, disabled) {
   const run = session.state.run;
-  const job = jobs.JOBS[run.jobId];
+  const job = run.order ? { emoji: run.order.theme.emoji, name: run.order.title } : jobs.JOBS[run.jobId];
   const round = run.game.rounds[run.round];
   box.addTextDisplayComponents(
-    text(`## 🎮 Zadanie: ${job.emoji} ${job.name}\n-# Runda **${run.round + 1}/${run.game.rounds.length}** · poprawnych: **${run.hits}** · wypłata zależy od wyniku (od ×${jobs.TASK_MULT[0]} do ×${jobs.TASK_MULT[3]})`),
+    text(`## 🎮 ${run.order ? 'Zlecenie' : 'Zadanie'}: ${job.emoji} ${job.name}\n-# Runda **${run.round + 1}/${run.game.rounds.length}** · poprawnych: **${run.hits}** · wypłata zależy od wyniku (od ×${jobs.TASK_MULT[0]} do ×${jobs.TASK_MULT[3]})`),
   );
   box.addSeparatorComponents(sep());
 
@@ -319,9 +322,9 @@ async function render(session) {
 
 const resultText = (r) => {
   const lines = [];
-  if (r.mode === 'task') lines.push(`🎮 Zadanie: **${r.hits}/${r.rounds}** poprawnych (×${r.mult}) → ${coin(r.pay)} i **${r.xp} XP**.`);
+  if (r.mode === 'task') lines.push(`${r.themeId ? '📋 Zlecenie' : '🎮 Zadanie'}: **${r.hits}/${r.rounds}** poprawnych (×${r.mult}) → ${coin(r.pay)} i **${r.xp} XP**.`);
   else lines.push(`📥 Odebrano ${coin(r.pay)} i **${r.xp} XP**.`);
-  lines.push(`-# Saldo: ${coin(r.balance)} · zmian w tej pracy: ${r.shifts}`);
+  lines.push(`-# Saldo: ${coin(r.balance)}${r.shifts === null ? ' · zlecenia nie liczą się do kariery' : ` · zmian w tej pracy: ${r.shifts}`}`);
   if (r.rankUp) lines.push(`⭐ **Awans!** Jesteś teraz: **${r.rankUp.to}**. Wypłaty rosną!`);
   if (r.level && r.level.newLevel > r.level.oldLevel) lines.push(`🎉 Nowy poziom serwerowy: **${r.level.newLevel}**!`);
   return lines.join('\n');
@@ -381,11 +384,10 @@ async function onClick(click, session) {
       state.notice = errorText(r);
       return render(session);
     }
-    const game = games.makeGame(r.jobId);
-    game.rounds = game.rounds.slice(0, r.rounds);
-    state.run = { shiftId: r.shiftId, jobId: r.jobId, game, round: 0, hits: 0, pressed: [], phase: game.kind === 'memory' ? 'show' : 'ask' };
+    const game = games.makeOrderGame(r.order.theme, r.rounds);
+    state.run = { shiftId: r.shiftId, jobId: r.jobId, order: r.order, game, round: 0, hits: 0, pressed: [], phase: game.kind === 'memory' ? 'show' : 'ask' };
     state.view = 'game';
-    state.notice = `📋 Zlecenie rozpoczęte (⚡ -${r.cost}). Dokończ je, bo przerwane przepada. Następna mini-gra za ${r.cooldownMin} min.`;
+    state.notice = `📋 **${r.order.title}** rozpoczęte (⚡ -${r.cost}). Dokończ je, bo przerwane przepada. Następna mini-gra za ${r.cooldownMin} min.`;
     return render(session);
   }
   if (id === 'pr_offers') {
