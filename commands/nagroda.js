@@ -26,11 +26,12 @@ module.exports = {
       return;
     }
 
-    const [luckInfo, armed, owned, pity] = await Promise.all([
+    const [luckInfo, armed, owned, pity, sunrise] = await Promise.all([
       inv.getLuckBreakdown(guildId, user.id),
       inv.getArmed(guildId, user.id),
       inv.getOwnedUnique(guildId, user.id),
       inv.getPity(guildId, user.id, 'daily'),
+      inv.itemLevel(guildId, user.id, 'wschod'),
     ]);
 
     // Bonus = szczęście (Koniczyna, Podkowa, włączona Koniczynka) + pech (licznik słabych losowań), ze wspólnym limitem
@@ -38,7 +39,8 @@ module.exports = {
 
     // Jeden modyfikator skrzyni na odbiór: Latarka albo Zapasowy klucz
     const modifier = armed.daily_mod === 'latarka' ? 'latarka' : armed.daily_mod === 'klucz' ? 'klucz' : null;
-    const itemChance = armed.daily_item ? items.DAILY_ITEM_CHANCE_BUDZIK : items.DAILY_ITEM_CHANCE;
+    // Wschód słońca (stały przedmiot) dodaje szansę na przedmiot za każdy poziom
+    const itemChance = Math.min(0.9, (armed.daily_item ? items.DAILY_ITEM_CHANCE_BUDZIK : items.DAILY_ITEM_CHANCE) + sunrise * items.PERKS.DAILY_ITEM_PER_LEVEL);
 
     // Zawartość wszystkich trzech skrzyń losujemy z góry (kryptograficznym RNG).
     // Skrzynie są niezależne i takie same, więc wybór skrzyni nie zmienia średniej nagrody.

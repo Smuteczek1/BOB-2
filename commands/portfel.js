@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const db = require('../db');
 const { CURRENCY, formatCoins, reasonLabel } = require('../utils/economy');
+const skarbonka = require('../utils/skarbonka');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -23,6 +24,11 @@ module.exports = {
     }
 
     const guildId = interaction.guild.id;
+
+    // Skarbonka: właściciel dostaje odsetki przy otwarciu własnego portfela (raz dziennie, do 3 dni wstecz)
+    let interest = null;
+    if (isSelf) interest = await skarbonka.collect(guildId, target.id).catch((err) => { console.error('Skarbonka:', err); return null; });
+
     const account = await db.getEconomyAccount(guildId, target.id);
 
     const balance = Number(account?.balance ?? 0);
@@ -49,6 +55,10 @@ module.exports = {
           }).join('\n')
         : '_Brak operacji. Odbierz skrzynię komendą `/nagroda`!_';
       embed.addFields({ name: 'Ostatnie operacje', value: lines });
+    }
+
+    if (interest?.ok) {
+      embed.addFields({ name: '🐷 Skarbonka', value: `Odsetki: +${formatCoins(interest.amount)} (poziom ${interest.level}${interest.days > 1 ? `, za ${interest.days} dni` : ''})` });
     }
 
     await interaction.reply({ embeds: [embed] });

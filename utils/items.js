@@ -2,6 +2,16 @@ const { randomInt } = require('node:crypto');
 const { DAILY_TIERS } = require('./economy');
 const jobsCfg = require('./jobs');
 
+// Stałe przedmioty "ekonomiczne" (poziom = ilość w ekwipunku, max 5)
+const PERKS = {
+  SLOTS_PER_LEVEL: 1, // Magazyn: +ofert na rynku za poziom
+  FEE_STEP: 0.004, // Magazyn: o tyle mniejsza prowizja rynku za poziom (5% -> 3% na 5. poziomie)
+  DAILY_ITEM_PER_LEVEL: 0.02, // Wschód słońca: +szansy na przedmiot w dziennej skrzyni za poziom
+  INTEREST_PCT_PER_LEVEL: 0.2, // Skarbonka: % salda dziennie za poziom
+  INTEREST_CAP_PER_LEVEL: 400, // Skarbonka: limit odsetek dziennie za poziom
+  INTEREST_MAX_DAYS: 3, // za ile zaległych dni naraz można odebrać odsetki
+};
+
 // ============================================================
 //  KATALOG PRZEDMIOTÓW I SKRZYŃ
 //  Wszystko, co chcesz zmieniać (nazwy, ceny, szanse, wagi), jest tutaj, w jednym pliku.
@@ -208,6 +218,17 @@ const ITEMS = {
     desc: `STAŁY, działa zawsze. Kolejne sztuki podnoszą poziom (max ${MAX_LEVEL}): Kawa, Energetyk i inne dają o ${jobsCfg.BATTERY_PER_LEVEL}% więcej energii za poziom.`,
     use: { type: 'none', message: 'Powerbank działa sam (więcej energii z napojów). Kolejne sztuki ze skrzyń podnoszą jego poziom.' },
   },
+  magazyn: {
+    id: 'magazyn', name: 'Magazyn', emoji: '📦', tier: 4, kind: 'permanent', unique: true, maxLevel: MAX_LEVEL, weight: 6, value: 4000,
+    desc: `STAŁY, działa zawsze. Kolejne sztuki podnoszą poziom (max ${MAX_LEVEL}): +${PERKS.SLOTS_PER_LEVEL} oferta na rynku i prowizja niższa o ${PERKS.FEE_STEP * 100}% za poziom (do 3%).`,
+    use: { type: 'none', message: 'Magazyn działa sam (więcej ofert i niższa prowizja na rynku). Kolejne sztuki ze skrzyń podnoszą jego poziom.' },
+  },
+  wschod: {
+    id: 'wschod', name: 'Wschód słońca', emoji: '🌅', tier: 4, kind: 'permanent', unique: true, maxLevel: MAX_LEVEL, weight: 6, value: 4000,
+    desc: `STAŁY, działa zawsze. Kolejne sztuki podnoszą poziom (max ${MAX_LEVEL}): +${PERKS.DAILY_ITEM_PER_LEVEL * 100}% szansy na przedmiot w dziennej skrzyni za poziom.`,
+    use: { type: 'none', message: 'Wschód słońca działa sam (większa szansa na przedmiot w dziennej skrzyni). Kolejne sztuki ze skrzyń podnoszą jego poziom.' },
+  },
+
   wytrych: {
     id: 'wytrych', name: 'Wytrych', emoji: '🔑', tier: 4, kind: 'consumable', weight: 0, value: 800,
     desc: 'Do napadu. (Napad będzie dostępny wkrótce, wytrych jeszcze nie wypada ze skrzyń.)',
@@ -246,6 +267,12 @@ const ITEMS = {
     desc: `STAŁY, działa zawsze. Kolejne sztuki podnoszą poziom (max ${MAX_LEVEL}): awans w pracy po ${jobsCfg.PROMO_PER_LEVEL}% mniejszej liczbie zmian za poziom.`,
     use: { type: 'none', message: 'Dyplom działa sam (szybsze awanse w pracy). Kolejne sztuki ze skrzyń podnoszą jego poziom.' },
   },
+  skarbonka: {
+    id: 'skarbonka', name: 'Skarbonka', emoji: '🐷', tier: 5, kind: 'permanent', unique: true, maxLevel: MAX_LEVEL, weight: 6, value: 6000,
+    desc: `STAŁA, działa zawsze. Kolejne sztuki podnoszą poziom (max ${MAX_LEVEL}): odsetki ${PERKS.INTEREST_PCT_PER_LEVEL}% salda dziennie za poziom (do ${PERKS.INTEREST_CAP_PER_LEVEL} 🪙 za poziom na dzień). Naliczane przy otwarciu /portfel, do ${PERKS.INTEREST_MAX_DAYS} dni wstecz.`,
+    use: { type: 'none', message: 'Skarbonka działa sama (odsetki od salda). Sprawdź /portfel, żeby je odebrać. Kolejne sztuki ze skrzyń podnoszą jej poziom.' },
+  },
+
   kufer: {
     id: 'kufer', name: 'Kufer Boba', emoji: '🧰', tier: 5, kind: 'consumable', weight: 60, value: 29600,
     desc: 'Nic, gigantyczna suma albo mandat.',
@@ -645,6 +672,7 @@ const WARSAW_DATE = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Warsaw'
 function warsawDate(ms = Date.now()) { return WARSAW_DATE.format(new Date(ms)); }
 
 module.exports = {
+  PERKS,
   TIER_NAMES, TIER_ICONS, ITEMS, CHESTS,
   MAX_LEVEL, LEVEL_BONUS, COMBO_BONUS, ONCE_BONUS, PITY_MAX, CHEST_SCALE, STRENGTH,
   LUCK_CAP, LUCK_COMBO_BONUS, DAILY_ITEM_CHANCE, DAILY_ITEM_CHANCE_BUDZIK,

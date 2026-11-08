@@ -82,7 +82,14 @@ function parsePrice(input) {
   return Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
-const feeOf = (price) => Math.floor(price * FEE);
+// Magazyn (stały przedmiot sprzedawcy) obniża prowizję i zwiększa limit ofert
+const feeRate = (level = 0) => Math.max(0.02, FEE - Math.max(0, level) * items.PERKS.FEE_STEP);
+const feeOf = (price, level = 0) => Math.floor(price * feeRate(level));
+const limitFor = (level = 0) => MAX_LISTINGS + Math.max(0, level) * items.PERKS.SLOTS_PER_LEVEL;
+async function perksFor(guildId, userId, c) {
+  const level = await inv.itemLevel(guildId, userId, 'magazyn', c);
+  return { level, limit: limitFor(level), fee: feeRate(level) };
+}
 
 // ---------------- ODCZYT ----------------
 // Przedmioty, które gracz może wystawić (z ekwipunku, bez skrzyń), od najwyższej rzadkości
@@ -158,7 +165,7 @@ async function listItem(guildId, userId, itemId, price, now = Date.now()) {
     // blokada na sprzedawcę: dwa szybkie kliknięcia nie przekroczą limitu ofert
     await c.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`market:${guildId}:${userId}`]);
     const count = await c.query("SELECT COUNT(*)::int AS n FROM market_listings WHERE guild_id = $1 AND seller_id = $2 AND status = 'active'", [guildId, userId]);
-    if (count.rows[0].n >= MAX_LISTINGS) return { ok: false, reason: 'limit' };
+    if (count.rows[0].n >= limitFor(await inv.itemLevel(guildId, userId, 'magazyn', c))) return { ok: false, reason: 'limit' };
 
     if (!(await inv.removeItem(c, guildId, userId, itemId, 1))) return { ok: false, reason: 'missing' };
 
@@ -184,7 +191,7 @@ async function buyListing(guildId, buyerId, listingId, now = Date.now()) {
       if (l.seller_id === buyerId) return { ok: false, reason: 'own' };
 
       const price = Number(l.price);
-      const fee = feeOf(price);
+      const fee = feeOf(price, await inv.itemLevel(guildId, l.seller_id, 'magazyn', c));
 
       // Konta blokujemy zawsze w tej samej kolejności, żeby dwie wymiany "na krzyż" nie zakleszczyły się
       await c.query(
@@ -300,6 +307,9 @@ module.exports = {
   suggestedPrice,
   parsePrice,
   feeOf,
+  feeRate,
+  limitFor,
+  perksFor,
   getSellable,
   getListings,
   getListing,

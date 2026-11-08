@@ -7,6 +7,12 @@ class Refused extends Error {}
 
 const raw = () => db.raw;
 
+// Poziom stałego przedmiotu (= ilość w ekwipunku); c może być klientem transakcji
+async function itemLevel(guildId, userId, itemId, c = raw()) {
+  const res = await c.query('SELECT quantity FROM inventory WHERE guild_id = $1 AND user_id = $2 AND item_id = $3', [guildId, userId, itemId]);
+  return Number(res.rows[0]?.quantity ?? 0);
+}
+
 // Przedmioty stałe ze szczęściem (poziom = ilość w ekwipunku)
 const LUCK_ITEM_IDS = ['koniczyna', 'podkowa'];
 
@@ -241,6 +247,7 @@ async function claimDailyBundle(guildId, userId, coins, itemIds = [], consumeKin
 
 module.exports = {
   Refused,
+  itemLevel,
   getInventory, getBoosts, getLuckBreakdown, getLuck, getPity, getAllPity, getArmed, getOwnedUnique,
   addItem, removeItem,
   buyChest, settleChestOpen, claimDailyBundle,

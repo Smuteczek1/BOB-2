@@ -24,6 +24,7 @@ const market = require('../utils/market');
 //  Wystawiony przedmiot leży w depozycie do sprzedaży/anulowania/wygaśnięcia (patrz utils/market.js).
 // ============================================================
 
+const pct = (rate) => Math.round(rate * 1000) / 10; // 0.046 -> 4.6
 const V2 = MessageFlags.IsComponentsV2;
 const IDLE_MS = 5 * 60_000;
 const MAX_MS = 14 * 60_000;
@@ -45,7 +46,7 @@ const ERRORS = {
   own: '🚫 To twoja własna oferta.',
   funds: '💸 Nie masz tyle monet. Nic nie zostało pobrane.',
   cannot_hold: '🚫 Nie możesz kupić tego przedmiotu: masz już ten unikat albo jego maksymalny poziom. Nic nie zostało pobrane.',
-  limit: `🚫 Masz już maksymalną liczbę ofert (${market.MAX_LISTINGS}). Anuluj którąś w zakładce „Moje oferty”.`,
+  limit: '🚫 Masz już maksymalną liczbę ofert. Anuluj którąś w zakładce „Moje oferty”.',
   missing: '🚫 Nie masz już tego przedmiotu.',
   item: '🚫 Tego przedmiotu nie da się sprzedać.',
 };
@@ -157,12 +158,13 @@ async function offersView(session, box, disabled) {
 async function sellView(session, box, disabled) {
   const { state } = session;
   const [sellable, mineNow] = await Promise.all([market.getSellable(session.guildId, session.user.id), market.getMyListings(session.guildId, session.user.id)]);
-  const atLimit = mineNow.length >= market.MAX_LISTINGS;
+  const perks = session.perks ?? (await market.perksFor(session.guildId, session.user.id));
+  const atLimit = mineNow.length >= perks.limit;
 
   box.addTextDisplayComponents(
     text(
       `### 🏷️ Wystaw przedmiot\nWybierz przedmiot, potem ustal cenę. Przedmiot trafia do depozytu do czasu sprzedaży, anulowania albo wygaśnięcia (${market.LISTING_DAYS} dni).\n` +
-      `-# Prowizja ${Math.round(market.FEE * 100)}% płaci sprzedawca · twoje oferty: ${mineNow.length}/${market.MAX_LISTINGS}` +
+      `-# Prowizja ${pct(perks.fee)}% płaci sprzedawca · twoje oferty: ${mineNow.length}/${perks.limit}` +
       (atLimit ? '\n-# 🚫 Limit ofert osiągnięty.' : ''),
     ),
   );
@@ -219,7 +221,7 @@ async function mineView(session, box, disabled) {
     market.getRecentSales(session.guildId, session.user.id, 3),
   ]);
 
-  box.addTextDisplayComponents(text(`### 📦 Moje oferty (${mine.length}/${market.MAX_LISTINGS})`));
+  box.addTextDisplayComponents(text(`### 📦 Moje oferty (${mine.length}/${(session.perks ?? (await market.perksFor(session.guildId, session.user.id))).limit})`));
   if (mine.length === 0) box.addTextDisplayComponents(text('_Nie masz aktywnych ofert._'));
   for (const l of mine) {
     box.addSectionComponents(
@@ -227,7 +229,7 @@ async function mineView(session, box, disabled) {
         .addTextDisplayComponents(
           text(
             `${tierTag(l.itemId)}\n${nameOf(l.itemId)}\n` +
-            `-# ${coin(l.price)} (dostaniesz ${coin(l.price - market.feeOf(l.price))}) · wygasa <t:${Math.floor(l.expiresAt / 1000)}:R>`,
+            `-# ${coin(l.price)} (dostaniesz ${coin(l.price - market.feeOf(l.price, session.perks?.level))}) · wygasa <t:${Math.floor(l.expiresAt / 1000)}:R>`,
           ),
         )
         .setButtonAccessory(
@@ -250,6 +252,7 @@ async function mineView(session, box, disabled) {
 async function buildPanel(session, { disabled = false } = {}) {
   const { state } = session;
   const balance = await getBalance(session);
+  session.perks = await market.perksFor(session.guildId, session.user.id);
   const box = new ContainerBuilder().setAccentColor(0x16a085);
 
   if (state.notice) {
@@ -257,7 +260,7 @@ async function buildPanel(session, { disabled = false } = {}) {
     box.addSeparatorComponents(sep());
   }
   box.addTextDisplayComponents(
-    text(`## 🏪 Rynek Boba\n-# Kupuj i sprzedawaj przedmioty innych graczy · prowizja ${Math.round(market.FEE * 100)}% · saldo: ${coin(balance)}`),
+    text(`## 🏪 Rynek Boba\n-# Kupuj i sprzedawaj przedmioty innych graczy · prowizja ${pct(session.perks.fee)}% · saldo: ${coin(balance)}`),
   );
   box.addActionRowComponents(tabsRow(state.view, disabled));
   box.addSeparatorComponents(sep());
@@ -287,7 +290,7 @@ async function doSell(session, price) {
   const itemId = state.sellItem;
   const r = await market.listItem(session.guildId, session.user.id, itemId, price);
   if (r.ok) {
-    state.notice = `✅ Wystawiono ${nameOf(itemId)} za ${coin(price)}. Dostaniesz ${coin(price - market.feeOf(price))} po prowizji. Oferta wygasa <t:${Math.floor(r.expiresAt / 1000)}:R>.`;
+    state.notice = `✅ Wystawiono ${nameOf(itemId)} za ${coin(price)}. Dostaniesz ${coin(price - market.feeOf(price, session.perks?.level))} po prowizji. Oferta wygasa <t:${Math.floor(r.expiresAt / 1000)}:R>.`;
     state.sellItem = null;
   } else if (r.reason === 'price') {
     state.notice = `⚠️ Cena poza widełkami. Dla tego przedmiotu: **${r.min.toLocaleString('pl-PL')} – ${r.max.toLocaleString('pl-PL')}** 🪙.`;
