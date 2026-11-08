@@ -14,6 +14,9 @@ const db = require('../db');
 const jobs = require('../utils/jobs');
 const work = require('../utils/work');
 const games = require('../utils/workGames');
+const items = require('../utils/items');
+const inventory = require('../utils/inventory');
+const itemUse = require('../utils/itemUse');
 
 // ============================================================
 //  /praca: prywatne menu pracy (Components V2, jak /sklep i /rynek).
@@ -54,10 +57,13 @@ const ERRORS = {
   already: 'Zasiłek już dziś odebrano.',
   worked: 'Dziś już pracowano, więc zasiłek się nie należy.',
   none: 'Nie masz zmiany do odebrania.',
+  no_order: 'Nie ma takiego zlecenia.',
+  order_done: 'To zlecenie już wykonano. Za chwilę pojawią się nowe.',
   gone: 'To zadanie jest już nieaktualne (rozliczone albo przerwane).',
 };
 function errorText(r) {
-  if (r.reason === 'energy') return `⚡ Za mało energii (potrzeba ${r.need}, masz ${r.left}). Energia odnowi się o północy.`;
+  if (r.reason === 'energy') return `⚡ Za mało energii (potrzeba ${r.need}, masz ${r.left}).${r.nextAt ? ` Następny punkt <t:${ts(r.nextAt)}:R>.` : ''} Pomoże Kawa albo Energetyk z ekwipunku.`;
+  if (r.reason === 'cooldown') return `⏳ Przerwa między zadaniami: następne zadanie lub zlecenie <t:${ts(r.readyAt)}:R>. Karta przerwy kończy ją od razu.`;
   if (r.reason === 'level') return `🔒 Ta praca wymaga poziomu serwerowego **${r.need}**. XP zdobywasz pisząc, rozmawiając na kanałach głosowych i pracując.`;
   if (r.reason === 'not_yet') return `⏳ Zmiana jeszcze trwa. Skończy się <t:${ts(r.endsAt)}:R>.`;
   return `⚠️ ${ERRORS[r.reason] ?? 'Nie udało się.'}`;
@@ -85,12 +91,13 @@ function jobStatusBlock(st) {
   }
   const job = jobs.JOBS[st.jobId];
   const shifts = st.career[st.jobId] ?? 0;
-  const rank = jobs.rankInfo(st.jobId, shifts);
+  const rank = jobs.rankInfo(st.jobId, shifts, st.gear.promo);
   const progress = rank.next ? `Zmiany: **${shifts}** / ${rank.next.shifts} do stopnia „${rank.next.name}”` : `Zmiany: **${shifts}** · najwyższy stopień!`;
-  const pay = jobs.payFor(st.jobId, shifts);
+  const pb = 1 + st.gear.payPct / 100;
+  const pay = Math.round(jobs.payFor(st.jobId, shifts, 1, st.gear.promo) * pb);
   return (
     `### ${job.emoji} ${rank.name}\n${job.name} · stopień **${rank.idx + 1}/5** · mnożnik wypłaty ×${rank.mult}\n${progress}\n` +
-    `💰 Zmiana: ${coin(pay)} · zadanie: ${coin(jobs.payFor(st.jobId, shifts, jobs.TASK_MULT[0]))}–${coin(jobs.payFor(st.jobId, shifts, jobs.TASK_MULT[3]))}\n` +
+    `💰 Zmiana: ${coin(pay)} · zadanie: ${coin(Math.round(jobs.payFor(st.jobId, shifts, jobs.TASK_MULT[0], st.gear.promo) * pb))}–${coin(Math.round(jobs.payFor(st.jobId, shifts, jobs.TASK_MULT[3], st.gear.promo) * pb))}\n` +
     `-# ⚡ koszt ${job.energy} · ⏳ zmiana czasowa ${job.minutes} min · zadanie: ${GAME_NAMES[job.game]} · +${jobs.xpFor(job.id)} XP (zadanie +${jobs.xpFor(job.id, true)})`
   );
 }
@@ -100,7 +107,21 @@ async function mainView(session, box, st, disabled) {
   box.addTextDisplayComponents(text(`## 💼 Praca\n-# Poziom serwerowy: **${st.level}** · saldo: ${coin(balance)}`));
   box.addSeparatorComponents(sep());
   box.addTextDisplayComponents(text(jobStatusBlock(st)));
-  box.addTextDisplayComponents(text(`⚡ Energia: ${energyBar(st.energyLeft, st.energyMax)} **${st.energyLeft}/${st.energyMax}**\n-# Odnawia się o północy (czas polski).`));
+  const regenInfo = st.nextEnergyAt ? ` · następny punkt <t:${ts(st.nextEnergyAt)}:R>` : ' · pełny zapas';
+  const g = st.gear;
+  const gear = [
+    g.levels.krzeslo ? `🪑${g.levels.krzeslo}` : null, g.levels.ekspres ? `🫖${g.levels.ekspres}` : null,
+    g.xpPct ? `🧠 +${g.xpPct}% XP` : null, g.payPct ? `💼 +${g.payPct}% monet` : null,
+    g.levels.zegarek ? `⏱️ przerwa ${g.cooldownMin} min` : null, g.promoPct ? `🏆 awans -${g.promoPct}% zmian` : null, g.batteryPct ? `🔋 +${g.batteryPct}% energii z napojów` : null,
+  ].filter(Boolean).join(' · ');
+  box.addTextDisplayComponents(
+    text(`⚡ Energia: ${energyBar(st.energyLeft, st.energyMax)} **${st.energyLeft}/${st.energyMax}**\n-# Regeneracja: **+${st.regenPerHour}/h**${regenInfo}${gear ? ` · ${gear}` : ''}`),
+  );
+  const notes = [];
+  if (st.taskReadyAt > Date.now()) notes.push(`⏳ Przerwa między zadaniami: gotowe <t:${ts(st.taskReadyAt)}:R>`);
+  if (st.boostPay) notes.push(`💵 Aktywna premia: +${st.boostPay}% monet`);
+  if (st.boostXp) notes.push(`🎓 Aktywne szkolenie: +${st.boostXp}% XP`);
+  if (notes.length) box.addTextDisplayComponents(text(notes.join('\n')));
 
   const job = st.jobId ? jobs.JOBS[st.jobId] : null;
   const shift = st.activeShift;
@@ -123,12 +144,18 @@ async function mainView(session, box, st, disabled) {
   );
   box.addActionRowComponents(
     new ActionRowBuilder().addComponents(
+      btn('pr_orders', 'Zlecenia', ButtonStyle.Primary, { emoji: '📋', disabled: disabled || !job }),
       btn('pr_offers', 'Oferty pracy', ButtonStyle.Secondary, { emoji: '🔎', disabled }),
-      ...(job
-        ? [btn('pr_quit', 'Rzuć pracę', ButtonStyle.Secondary, { emoji: '🚪', disabled: disabled || busy })]
-        : [btn('pr_benefit', `Zasiłek (+${jobs.BENEFIT})`, ButtonStyle.Secondary, { emoji: '💰', disabled: disabled || st.benefitTaken || st.workedToday })]),
+      btn('pr_items', 'Przedmioty', ButtonStyle.Secondary, { emoji: '🎒', disabled }),
       btn('pr_refresh', 'Odśwież', ButtonStyle.Secondary, { emoji: '🔄', disabled }),
       btn('pr_close', 'Zamknij', ButtonStyle.Danger, { emoji: '✖️', disabled }),
+    ),
+  );
+  box.addActionRowComponents(
+    new ActionRowBuilder().addComponents(
+      job
+        ? btn('pr_quit', 'Rzuć pracę', ButtonStyle.Secondary, { emoji: '🚪', disabled: disabled || busy })
+        : btn('pr_benefit', `Zasiłek (+${jobs.BENEFIT})`, ButtonStyle.Secondary, { emoji: '💰', disabled: disabled || st.benefitTaken || st.workedToday }),
     ),
   );
   if (st.benefitTaken) box.addTextDisplayComponents(text('-# 💤 Dziś pobrano zasiłek: pracować możesz dopiero jutro.'));
@@ -176,12 +203,65 @@ async function offersView(session, box, st, disabled) {
   box.addActionRowComponents(new ActionRowBuilder().addComponents(btn('pr_back', 'Wróć', ButtonStyle.Secondary, { emoji: '◀️', disabled })));
 }
 
+function ordersView(session, box, st, disabled) {
+  const job = st.jobId ? jobs.JOBS[st.jobId] : null;
+  const next = (st.orderSlot + 1) * 3_600_000;
+  box.addTextDisplayComponents(
+    text(`## 📋 Zlecenia\n-# Nowa lista <t:${ts(next)}:R> (co godzinę). Każde zlecenie to krótka mini-gra (${job ? GAME_NAMES[job.game] : '—'}). Przerwa między grami: ${st.gear.cooldownMin} min.`),
+  );
+  box.addSeparatorComponents(sep());
+  const waiting = st.taskReadyAt > Date.now();
+  if (waiting) box.addTextDisplayComponents(text(`-# ⏳ Przerwa: następna mini-gra <t:${ts(st.taskReadyAt)}:R>`));
+  for (const o of st.orders) {
+    const busy = Boolean(st.activeShift);
+    const noEnergy = st.energyLeft < o.tier.energy;
+    box.addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(
+          text(
+            `${o.done ? '✅' : o.tier.emoji} **${o.tier.name} zlecenie** · ${o.tier.rounds} ${o.tier.rounds === 1 ? 'runda' : 'rundy'}\n` +
+            `-# ⚡ ${o.tier.energy} · do ${coin(Math.round(o.pay * jobs.TASK_MULT[3]))} · do **${Math.round(o.xp * jobs.TASK_XP_BONUS)} XP**${o.done ? ' · wykonane' : ''}`,
+          ),
+        )
+        .setButtonAccessory(
+          btn(`pr_order:${o.idx}`, o.done ? 'Zrobione' : 'Start', ButtonStyle.Success, {
+            emoji: o.done ? '✅' : '▶️',
+            disabled: disabled || o.done || busy || noEnergy || st.benefitTaken,
+          }),
+        ),
+    );
+  }
+  if (!job) box.addTextDisplayComponents(text('_Najpierw znajdź pracę w „Oferty pracy”._'));
+  box.addActionRowComponents(new ActionRowBuilder().addComponents(btn('pr_back', 'Wróć', ButtonStyle.Secondary, { emoji: '◀️', disabled })));
+}
+
+// Przedmioty do pracy, które masz w ekwipunku (jednorazowe: przycisk Użyj; stałe: tylko poziom)
+async function itemsView(session, box, st, disabled) {
+  const inv = await inventory.getInventory(session.guildId, session.user.id);
+  const mine = inv.filter((r) => items.ITEMS[r.itemId]?.use?.type?.startsWith('work_') || items.ITEMS[r.itemId]?.workFamily);
+  box.addTextDisplayComponents(text('## 🎒 Przedmioty do pracy\n-# Wypadają ze skrzyń. Kawa, Energetyk i spółka uzupełniają energię, a stałe przedmioty (krzesło, ekspres) działają same.'));
+  box.addSeparatorComponents(sep());
+  const perm = mine.filter((r) => items.ITEMS[r.itemId].workFamily);
+  const use = mine.filter((r) => !items.ITEMS[r.itemId].workFamily).slice(0, 8);
+  if (perm.length) box.addTextDisplayComponents(text(perm.map((r) => { const d = items.ITEMS[r.itemId]; return `${d.emoji} **${d.name}** · poziom **${r.quantity}/${d.maxLevel}**\n-# ${d.desc}`; }).join('\n')));
+  for (const r of use) {
+    const d = items.ITEMS[r.itemId];
+    box.addSectionComponents(
+      new SectionBuilder()
+        .addTextDisplayComponents(text(`${d.emoji} **${d.name}** ×${r.quantity}\n-# ${d.desc}`))
+        .setButtonAccessory(btn(`pr_use:${d.id}`, 'Użyj', ButtonStyle.Success, { emoji: '✨', disabled })),
+    );
+  }
+  if (mine.length === 0) box.addTextDisplayComponents(text('_Nie masz jeszcze żadnych przedmiotów do pracy._'));
+  box.addActionRowComponents(new ActionRowBuilder().addComponents(btn('pr_back', 'Wróć', ButtonStyle.Secondary, { emoji: '◀️', disabled })));
+}
+
 function gameView(session, box, st, disabled) {
   const run = session.state.run;
   const job = jobs.JOBS[run.jobId];
   const round = run.game.rounds[run.round];
   box.addTextDisplayComponents(
-    text(`## 🎮 Zadanie: ${job.emoji} ${job.name}\n-# Runda **${run.round + 1}/${jobs.ROUNDS}** · poprawnych: **${run.hits}** · wypłata zależy od wyniku (od ×${jobs.TASK_MULT[0]} do ×${jobs.TASK_MULT[3]})`),
+    text(`## 🎮 Zadanie: ${job.emoji} ${job.name}\n-# Runda **${run.round + 1}/${run.game.rounds.length}** · poprawnych: **${run.hits}** · wypłata zależy od wyniku (od ×${jobs.TASK_MULT[0]} do ×${jobs.TASK_MULT[3]})`),
   );
   box.addSeparatorComponents(sep());
 
@@ -217,6 +297,8 @@ async function buildPanel(session, { disabled = false } = {}) {
   }
   if (state.view === 'game' && state.run) gameView(session, box, st, disabled);
   else if (state.view === 'offers') await offersView(session, box, st, disabled);
+  else if (state.view === 'orders') ordersView(session, box, st, disabled);
+  else if (state.view === 'items') await itemsView(session, box, st, disabled);
   else await mainView(session, box, st, disabled);
 
   return { components: [box], flags: V2 };
@@ -237,7 +319,7 @@ async function render(session) {
 
 const resultText = (r) => {
   const lines = [];
-  if (r.mode === 'task') lines.push(`🎮 Zadanie: **${r.hits}/${jobs.ROUNDS}** poprawnych (×${r.mult}) → ${coin(r.pay)} i **${r.xp} XP**.`);
+  if (r.mode === 'task') lines.push(`🎮 Zadanie: **${r.hits}/${r.rounds}** poprawnych (×${r.mult}) → ${coin(r.pay)} i **${r.xp} XP**.`);
   else lines.push(`📥 Odebrano ${coin(r.pay)} i **${r.xp} XP**.`);
   lines.push(`-# Saldo: ${coin(r.balance)} · zmian w tej pracy: ${r.shifts}`);
   if (r.rankUp) lines.push(`⭐ **Awans!** Jesteś teraz: **${r.rankUp.to}**. Wypłaty rosną!`);
@@ -250,7 +332,7 @@ async function endRound(session, hit, feedback, client) {
   const { state } = session;
   const run = state.run;
   if (hit) run.hits += 1;
-  if (run.round + 1 < jobs.ROUNDS) {
+  if (run.round + 1 < run.game.rounds.length) {
     run.round += 1;
     run.pressed = [];
     run.phase = run.game.kind === 'memory' ? 'show' : 'ask';
@@ -280,6 +362,32 @@ async function onClick(click, session) {
     state.view = 'main';
     return render(session);
   }
+  if (id === 'pr_orders') {
+    state.view = 'orders';
+    return render(session);
+  }
+  if (id === 'pr_items') {
+    state.view = 'items';
+    return render(session);
+  }
+  if (id.startsWith('pr_use:')) {
+    const r = await itemUse.useItem(gid, uid, id.slice('pr_use:'.length));
+    state.notice = r.ok ? `**${r.title}**\n${r.lines.join('\n')}` : `⚠️ ${r.message}`;
+    return render(session);
+  }
+  if (id.startsWith('pr_order:')) {
+    const r = await work.startOrder(gid, uid, Number(id.slice('pr_order:'.length)));
+    if (!r.ok) {
+      state.notice = errorText(r);
+      return render(session);
+    }
+    const game = games.makeGame(r.jobId);
+    game.rounds = game.rounds.slice(0, r.rounds);
+    state.run = { shiftId: r.shiftId, jobId: r.jobId, game, round: 0, hits: 0, pressed: [], phase: game.kind === 'memory' ? 'show' : 'ask' };
+    state.view = 'game';
+    state.notice = `📋 Zlecenie rozpoczęte (⚡ -${r.cost}). Dokończ je, bo przerwane przepada. Następna mini-gra za ${r.cooldownMin} min.`;
+    return render(session);
+  }
   if (id === 'pr_offers') {
     state.view = 'offers';
     return render(session);
@@ -304,7 +412,7 @@ async function onClick(click, session) {
   }
   if (id === 'pr_start_timed') {
     const r = await work.startTimed(gid, uid);
-    state.notice = r.ok ? `⏳ Zmiana rozpoczęta (⚡ -${r.cost}). Wróć <t:${ts(r.endsAt)}:R> i kliknij **Odbierz**.` : errorText(r);
+    state.notice = r.ok ? `${r.boosted.pay || r.boosted.xp ? '✨ Bonus z przedmiotu użyty.\n' : ''}⏳ Zmiana rozpoczęta (⚡ -${r.cost}). Wróć <t:${ts(r.endsAt)}:R> i kliknij **Odbierz**.` : errorText(r);
     return render(session);
   }
   if (id === 'pr_collect') {
@@ -321,7 +429,7 @@ async function onClick(click, session) {
     const game = games.makeGame(r.jobId);
     state.run = { shiftId: r.shiftId, jobId: r.jobId, game, round: 0, hits: 0, pressed: [], phase: game.kind === 'memory' ? 'show' : 'ask' };
     state.view = 'game';
-    state.notice = `🎮 Zadanie rozpoczęte (⚡ -${r.cost}). Dokończ je, bo przerwane przepada.`;
+    state.notice = `🎮 Zadanie rozpoczęte (⚡ -${r.cost}). Dokończ je, bo przerwane przepada. Następna mini-gra za ${r.cooldownMin} min.`;
     return render(session);
   }
   if (id === 'pr_giveup') {
@@ -402,7 +510,7 @@ async function openMenu(interaction) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('praca')
-    .setDescription('Praca: zarabiaj monety i XP, awansuj w karierze (energia odnawia się o północy).')
+    .setDescription('Praca: zmiany, zadania i zlecenia, awanse, energia regenerująca się co godzinę.')
     .setDMPermission(false),
 
   async execute(interaction) {

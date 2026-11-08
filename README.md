@@ -356,9 +356,11 @@ więc możesz dodać bota do wielu serwerów bez żadnych konfliktów.
 
 ### Prace (`/praca`)
 - 14 prac na poziomach serwerowych 0-50 (od sprzątacza do architekta), każda z 5 stopniami kariery (staż liczony osobno dla każdej pracy; wyższy stopień = wyższa wypłata, do ×1.9).
-- Dwa tryby: **zmiana czasowa** (start, potem odbiór po 30-90 min) i **zadanie** (mini-gra z 3 rund: pamięć, rachunki albo dopasowanie; wypłata ×0.7-×1.3, bez grzywien).
+- Trzy sposoby pracy: **zmiana czasowa** (start, odbiór po 30-90 min), **zadanie** (mini-gra z 3 rund: pamięć, rachunki albo dopasowanie; wypłata ×0.7-×1.3, bez grzywien) i **zlecenia** (co godzinę nowa lista: łatwe 1 runda, średnie 2, trudne 3).
+- Zadania i zlecenia mają **przerwę 10 minut** między sobą (`WORK_TASK_COOLDOWN_MIN`).
 - Praca daje **XP serwerowe** (zadanie +20%), więc awans na wyższe prace jest osiągalny.
-- Energia: 100 dziennie, każda praca kosztuje 20-33, odnawia się o północy (czas polski).
+- **Energia** regeneruje się ciągle: 5 na godzinę (`WORK_ENERGY_REGEN`), maksimum 100 (`WORK_ENERGY_MAX`), bez resetu o północy. Zmiana kosztuje 20-33, zlecenie 8-20.
+- Przedmioty do pracy (wypadają ze skrzyń, można je handlować na `/rynek`): Kawa (+15), Przekąska (+10), Energetyk (+30), Mega energetyk (+60), Karta przerwy (kończy przerwę), Premia (+50% monet), Szkolenie (+50% XP). Stałe, z poziomami do 5: **Ergonomiczne krzesło** (+10 maks. energii za poziom), **Ekspres do kawy** (+1 energii/h), **Notes mistrza** (+5% XP z pracy), **Złota teczka** (+4% monet z pracy), **Zegarek szefa** (przerwa krótsza o 1 min), **Dyplom awansu** (−4% zmian potrzebnych na awans) i **Powerbank** (+10% energii z napojów). Przedmioty używa się w `/praca` → Przedmioty albo w `/ekwipunek`.
 - Oferty: 4 losowe prace dziennie (inne dla każdego gracza), zmiana pracy raz dziennie.
-- Zasiłek dla bezrobotnych (60 🪙): po jego odebraniu danego dnia nie można pracować.
-- Zmienne opcjonalne: `WORK_ENERGY_MAX`, `WORK_BENEFIT`. Tabele tworzą się same przy pierwszym użyciu.
+- Zasiłek dla bezrobotnych (60 🪙, `WORK_BENEFIT`): po jego odebraniu danego dnia nie można pracować.
+- Tabele tworzą się same przy pierwszym użyciu (nowe kolumny dodawane automatycznie).

@@ -3,7 +3,17 @@
 //  Same dane i czysta matematyka: żadnej bazy, żadnego Discorda (łatwo to testować i zmieniać).
 // ============================================================
 
-const ENERGY_MAX = Number(process.env.WORK_ENERGY_MAX ?? 100); // energia dzienna, odnawia się o północy (czas polski)
+const ENERGY_MAX = Number(process.env.WORK_ENERGY_MAX ?? 100); // bazowy maksymalny zapas energii
+const ENERGY_REGEN = Number(process.env.WORK_ENERGY_REGEN ?? 5); // bazowa regeneracja: energii na godzinę (ciągła, bez resetu o północy)
+const CHAIR_PER_LEVEL = 10; // Ergonomiczne krzesło: +max energii za każdy poziom (max 5 poziomów)
+const ESPRESSO_PER_LEVEL = 1; // Ekspres do kawy: +energii/h za każdy poziom (max 5 poziomów)
+const TASK_COOLDOWN_MIN = Number(process.env.WORK_TASK_COOLDOWN_MIN ?? 10); // przerwa między zadaniami (mini-grami)
+const XP_PER_LEVEL = 5; // Notes mistrza: +% XP z pracy za poziom
+const PAY_PER_LEVEL = 4; // Złota teczka: +% monet z pracy za poziom
+const CLOCK_PER_LEVEL = 1; // Zegarek szefa: o tyle minut krótsza przerwa między zadaniami za poziom
+const PROMO_PER_LEVEL = 4; // Dyplom awansu: o tyle % mniej zmian potrzeba na awans za poziom
+const BATTERY_PER_LEVEL = 10; // Powerbank: +% energii z Kawy, Energetyka itp. za poziom
+const ORDERS_PER_HOUR = 3; // tyle zleceń co godzinę
 const BENEFIT = Number(process.env.WORK_BENEFIT ?? 60); // zasiłek dla bezrobotnych (raz dziennie)
 const OFFERS_PER_DAY = 4; // ile ofert pracy widzi gracz danego dnia (oprócz swojej obecnej pracy)
 const ROUNDS = 3; // rund w zadaniu (mini-grze)
@@ -14,7 +24,15 @@ const RANK_MULT = [1, 1.15, 1.35, 1.6, 1.9];
 
 // Zadanie (mini-gra): mnożnik wypłaty zależnie od liczby poprawnych rund (0-3). Bez grzywien: najgorzej 70%.
 const TASK_MULT = [0.7, 0.9, 1.1, 1.3];
-const TASK_XP_BONUS = 1.2; // zadanie daje o 20% więcej XP niż zmiana czasowa
+const TASK_XP_BONUS = 1.2;
+
+// Zlecenia (co godzinę nowa lista): krótkie mini-gry. rounds = liczba rund, energy = koszt,
+// pay/xp = mnożniki względem wypłaty / XP za zmianę. Trudne zlecenie opłaca się lepiej niż zwykłe zadanie (energia vs wypłata).
+const ORDER_TIERS = [
+  { id: 'easy', name: 'Łatwe', emoji: '🟢', rounds: 1, energy: 8, pay: 0.4, xp: 0.4 },
+  { id: 'medium', name: 'Średnie', emoji: '🟡', rounds: 2, energy: 14, pay: 0.8, xp: 0.75 },
+  { id: 'hard', name: 'Trudne', emoji: '🔴', rounds: 3, energy: 20, pay: 1.3, xp: 1.3 },
+]; // zadanie daje o 20% więcej XP niż zmiana czasowa
 
 // game: silnik mini-gry ('memory' pamięć, 'math' rachunki, 'pick' dopasuj odpowiedź)
 // math: rodzaj zadań rachunkowych (tylko dla game 'math')
@@ -100,23 +118,33 @@ const JOB_LIST = Object.values(JOBS).sort((a, b) => a.minLevel - b.minLevel || a
 
 // ---------------- KARIERA ----------------
 // Indeks stopnia (0-4) dla liczby przepracowanych zmian w danej pracy
-function rankIndex(shifts) {
+// promo = poziom Dyplomu awansu (zmniejsza liczbę zmian wymaganych na każdy awans)
+const needShifts = (i, promo = 0) => Math.ceil(RANK_SHIFTS[i] * (1 - (PROMO_PER_LEVEL * Math.max(0, promo)) / 100));
+function rankIndex(shifts, promo = 0) {
   let idx = 0;
-  for (let i = 0; i < RANK_SHIFTS.length; i++) if (shifts >= RANK_SHIFTS[i]) idx = i;
+  for (let i = 0; i < RANK_SHIFTS.length; i++) if (shifts >= needShifts(i, promo)) idx = i;
   return idx;
 }
 
-function rankInfo(jobId, shifts) {
+function rankInfo(jobId, shifts, promo = 0) {
   const job = JOBS[jobId];
-  const idx = rankIndex(shifts);
-  const next = idx < RANK_SHIFTS.length - 1 ? { name: job.ranks[idx + 1], shifts: RANK_SHIFTS[idx + 1] } : null;
+  const idx = rankIndex(shifts, promo);
+  const next = idx < RANK_SHIFTS.length - 1 ? { name: job.ranks[idx + 1], shifts: needShifts(idx + 1, promo) } : null;
   return { idx, name: job.ranks[idx], mult: RANK_MULT[idx], next };
 }
 
 // Wypłata za jedną zmianę na danym stopniu (mult: np. mnożnik zadania, domyślnie 1 = zmiana czasowa)
-const payFor = (jobId, shifts, mult = 1) => Math.max(1, Math.round(JOBS[jobId].base * RANK_MULT[rankIndex(shifts)] * mult));
+const payFor = (jobId, shifts, mult = 1, promo = 0) => Math.max(1, Math.round(JOBS[jobId].base * RANK_MULT[rankIndex(shifts, promo)] * mult));
 const xpFor = (jobId, task = false) => Math.round(JOBS[jobId].xp * (task ? TASK_XP_BONUS : 1));
-const taskMult = (hits) => TASK_MULT[Math.max(0, Math.min(TASK_MULT.length - 1, hits))];
+// Mnożnik wypłaty za wynik: 0..rounds poprawnych rund -> 0.7 .. 1.3 (dla 3 rund: 0.7 / 0.9 / 1.1 / 1.3)
+const taskMult = (hits, rounds = ROUNDS) => {
+  const r = Math.max(0, Math.min(1, rounds > 0 ? hits / rounds : 0));
+  return Math.round((TASK_MULT[0] + (TASK_MULT[TASK_MULT.length - 1] - TASK_MULT[0]) * r) * 100) / 100;
+};
+const maxEnergy = (chairLevel = 0) => ENERGY_MAX + CHAIR_PER_LEVEL * Math.max(0, chairLevel);
+const regenPerHour = (espressoLevel = 0) => ENERGY_REGEN + ESPRESSO_PER_LEVEL * Math.max(0, espressoLevel);
+// Wypłata i XP zlecenia dla gracza na jego obecnym stopniu (shifts = zmiany w tej pracy)
+const orderReward = (tier, jobId, shifts, promo = 0) => ({ pay: payFor(jobId, shifts, tier.pay, promo), xp: Math.max(1, Math.round(JOBS[jobId].xp * tier.xp)) });
 
 // ---------------- LOSOWOŚĆ POWTARZALNA (oferty dnia) ----------------
 function hashSeed(str) {
@@ -166,6 +194,21 @@ function offersFor(guildId, userId, dayKey, offersLevel, currentJobId = null) {
 
 module.exports = {
   ENERGY_MAX,
+  ENERGY_REGEN,
+  CHAIR_PER_LEVEL,
+  ESPRESSO_PER_LEVEL,
+  TASK_COOLDOWN_MIN,
+  ORDERS_PER_HOUR,
+  XP_PER_LEVEL,
+  PAY_PER_LEVEL,
+  CLOCK_PER_LEVEL,
+  PROMO_PER_LEVEL,
+  BATTERY_PER_LEVEL,
+  needShifts,
+  ORDER_TIERS,
+  maxEnergy,
+  regenPerHour,
+  orderReward,
   BENEFIT,
   OFFERS_PER_DAY,
   ROUNDS,

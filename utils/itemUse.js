@@ -2,6 +2,7 @@ const db = require('../db');
 const items = require('./items');
 const inv = require('./inventory');
 const lotto = require('./lotto');
+const work = require('./work');
 const { formatCoins } = require('./economy');
 
 const { Refused } = inv;
@@ -35,6 +36,9 @@ async function useItem(guildId, userId, itemId) {
       case 'arm_daily': return await useArmDaily(guildId, userId, def);
       case 'budzik': return await useBudzik(guildId, userId, def);
       case 'polisa': return await usePolisa(guildId, userId, def);
+      case 'work_energy':
+      case 'work_reset':
+      case 'work_boost': return await useWork(guildId, userId, def);
       case 'none': return refuse(def.use.message ?? 'Tego przedmiotu nie da się użyć.');
       default: return refuse('Tego przedmiotu nie da się jeszcze użyć.');
     }
@@ -46,6 +50,17 @@ async function useItem(guildId, userId, itemId) {
 
 async function requireItem(c, guildId, userId, itemId) {
   if (!(await inv.removeItem(c, guildId, userId, itemId, 1))) throw new Refused('Nie masz już tego przedmiotu.');
+}
+
+// ---- Przedmioty do pracy: Kawa, Przekąska, Energetyk, Mega energetyk, Karta przerwy, Premia, Szkolenie ----
+async function useWork(guildId, userId, def) {
+  await work.ensureSchema();
+  return db.withTransaction(async (c) => {
+    await requireItem(c, guildId, userId, def.id);
+    const r = await work.applyItemEffect(c, guildId, userId, def.use);
+    if (!r.ok) throw new Refused(r.message); // wyjątek cofa transakcję: przedmiot nie przepada
+    return ok(`${def.emoji} ${def.name}`, r.lines, 0xe67e22);
+  });
 }
 
 // ---- Teczka, Aktówka, Walizka, Sejf, Skarbiec, Kufer, Czarna Skrzynka ----

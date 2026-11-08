@@ -1,5 +1,6 @@
 const { randomInt } = require('node:crypto');
 const { DAILY_TIERS } = require('./economy');
+const jobsCfg = require('./jobs');
 
 // ============================================================
 //  KATALOG PRZEDMIOTÓW I SKRZYŃ
@@ -85,6 +86,16 @@ const ITEMS = {
     desc: `+${ONCE_BONUS}% szczęścia na następną skrzynię (dzienną albo ze sklepu). Sumuje się ze stałymi.`,
     use: { type: 'arm_luck', bonus: ONCE_BONUS },
   },
+  kawa: {
+    id: 'kawa', name: 'Kawa', emoji: '☕', tier: 0, kind: 'consumable', weight: 0.4, value: 60,
+    desc: 'Do pracy: +15 energii (nie więcej niż maksimum).',
+    use: { type: 'work_energy', amount: 15 },
+  },
+  przekaska: {
+    id: 'przekaska', name: 'Przekąska', emoji: '🥪', tier: 0, kind: 'consumable', weight: 0.4, value: 45,
+    desc: 'Do pracy: +10 energii (nie więcej niż maksimum).',
+    use: { type: 'work_energy', amount: 10 },
+  },
 
   // ---------------- 🟢 NIEZWYKŁA ----------------
   latarka: {
@@ -109,6 +120,16 @@ const ITEMS = {
     desc: 'Na jedną grę w kasynie: po przegranej 30% szans na zwrot straty (do 200).',
     use: { type: 'polisa', chance: 30, cap: 200 },
     bonus: { chance: 0.25, grant: 'darmowy_los', text: 'darmowy los', onlyIfRefund: true },
+  },
+  energetyk: {
+    id: 'energetyk', name: 'Energetyk', emoji: '🥤', tier: 1, kind: 'consumable', weight: 0.4, value: 150,
+    desc: 'Do pracy: +30 energii (nie więcej niż maksimum).',
+    use: { type: 'work_energy', amount: 30 },
+  },
+  karta_przerwy: {
+    id: 'karta_przerwy', name: 'Karta przerwy', emoji: '🪪', tier: 1, kind: 'consumable', weight: 0.4, value: 90,
+    desc: 'Do pracy: kończy przerwę między zadaniami, więc możesz od razu zagrać kolejną mini-grę.',
+    use: { type: 'work_reset' },
   },
 
   // ---------------- 🔵 RZADKA ----------------
@@ -136,6 +157,16 @@ const ITEMS = {
     use: { type: 'polisa', chance: 50, cap: 500 },
     bonus: { chance: 0.25, grant: 'darmowy_los', text: 'darmowy los', onlyIfRefund: true },
   },
+  premia: {
+    id: 'premia', name: 'Premia', emoji: '💵', tier: 2, kind: 'consumable', weight: 0.4, value: 260,
+    desc: 'Do pracy: następna zmiana albo zadanie daje +50% monet.',
+    use: { type: 'work_boost', pay: 50 },
+  },
+  szkolenie: {
+    id: 'szkolenie', name: 'Szkolenie', emoji: '🎓', tier: 2, kind: 'consumable', weight: 0.4, value: 240,
+    desc: 'Do pracy: następna zmiana albo zadanie daje +50% XP.',
+    use: { type: 'work_boost', xp: 50 },
+  },
 
   // ---------------- 🟣 LEGENDARNA ----------------
   wielka_polisa: {
@@ -150,12 +181,32 @@ const ITEMS = {
     use: MONEY(0.15, { p: 0.50, min: 3000, max: 6000 }, { p: 0.28, min: 7000, max: 12000 }, null, { p: 0.07, cap: 1000 }),
     bonus: { chance: 0.15, grant: 'klucz', text: 'Zapasowy klucz' },
   },
+  mega_energetyk: {
+    id: 'mega_energetyk', name: 'Mega energetyk', emoji: '⚡', tier: 3, kind: 'consumable', weight: 0.4, value: 600,
+    desc: 'Do pracy: +60 energii (nie więcej niż maksimum).',
+    use: { type: 'work_energy', amount: 60 },
+  },
 
   // ---------------- 🟠 MITYCZNA ----------------
   koniczyna: {
     id: 'koniczyna', name: 'Koniczyna', emoji: '🍀', tier: 4, kind: 'permanent', unique: true, maxLevel: MAX_LEVEL, luckFamily: 'koniczyna', weight: 20, value: 3000,
     desc: `STAŁA, działa zawsze. Kolejne sztuki podnoszą jej poziom (max ${MAX_LEVEL}): szczęście od +${LEVEL_BONUS[1]}% do +${LEVEL_BONUS[MAX_LEVEL]}%.`,
     use: { type: 'none', message: 'Koniczyna działa sama, nie trzeba jej używać. Kolejne sztuki ze skrzyń podnoszą jej poziom.' },
+  },
+  krzeslo: {
+    id: 'krzeslo', name: 'Ergonomiczne krzesło', emoji: '🪑', tier: 4, kind: 'permanent', unique: true, maxLevel: MAX_LEVEL, workFamily: 'chair', weight: 10, value: 3000,
+    desc: `STAŁE, działa zawsze. Kolejne sztuki podnoszą poziom (max ${MAX_LEVEL}): +${jobsCfg.CHAIR_PER_LEVEL} do maksymalnej energii w pracy za poziom.`,
+    use: { type: 'none', message: 'Krzesło działa samo (+max energii w pracy). Kolejne sztuki ze skrzyń podnoszą jego poziom.' },
+  },
+  zegarek: {
+    id: 'zegarek', name: 'Zegarek szefa', emoji: '⏱️', tier: 4, kind: 'permanent', unique: true, maxLevel: MAX_LEVEL, workFamily: 'clock', weight: 6, value: 4000,
+    desc: `STAŁY, działa zawsze. Kolejne sztuki podnoszą poziom (max ${MAX_LEVEL}): przerwa między zadaniami w pracy krótsza o ${jobsCfg.CLOCK_PER_LEVEL} min za poziom.`,
+    use: { type: 'none', message: 'Zegarek działa sam (krótsza przerwa między zadaniami). Kolejne sztuki ze skrzyń podnoszą jego poziom.' },
+  },
+  powerbank: {
+    id: 'powerbank', name: 'Powerbank', emoji: '🔋', tier: 4, kind: 'permanent', unique: true, maxLevel: MAX_LEVEL, workFamily: 'battery', weight: 6, value: 4000,
+    desc: `STAŁY, działa zawsze. Kolejne sztuki podnoszą poziom (max ${MAX_LEVEL}): Kawa, Energetyk i inne dają o ${jobsCfg.BATTERY_PER_LEVEL}% więcej energii za poziom.`,
+    use: { type: 'none', message: 'Powerbank działa sam (więcej energii z napojów). Kolejne sztuki ze skrzyń podnoszą jego poziom.' },
   },
   wytrych: {
     id: 'wytrych', name: 'Wytrych', emoji: '🔑', tier: 4, kind: 'consumable', weight: 0, value: 800,
@@ -174,6 +225,26 @@ const ITEMS = {
     id: 'podkowa', name: 'Podkowa', emoji: '🐴', tier: 5, kind: 'permanent', unique: true, maxLevel: MAX_LEVEL, luckFamily: 'podkowa', weight: 20, value: 3000,
     desc: `STAŁA, działa zawsze. Kolejne sztuki podnoszą jej poziom (max ${MAX_LEVEL}): szczęście od +${LEVEL_BONUS[1]}% do +${LEVEL_BONUS[MAX_LEVEL]}%. Z Koniczyną dają dodatkowe +${COMBO_BONUS}%.`,
     use: { type: 'none', message: 'Podkowa działa sama, nie trzeba jej używać. Kolejne sztuki ze skrzyń podnoszą jej poziom.' },
+  },
+  ekspres: {
+    id: 'ekspres', name: 'Ekspres do kawy', emoji: '🫖', tier: 5, kind: 'permanent', unique: true, maxLevel: MAX_LEVEL, workFamily: 'espresso', weight: 10, value: 3000,
+    desc: `STAŁY, działa zawsze. Kolejne sztuki podnoszą poziom (max ${MAX_LEVEL}): +${jobsCfg.ESPRESSO_PER_LEVEL} energii na godzinę w pracy za poziom.`,
+    use: { type: 'none', message: 'Ekspres działa sam (+regeneracja energii w pracy). Kolejne sztuki ze skrzyń podnoszą jego poziom.' },
+  },
+  notes: {
+    id: 'notes', name: 'Notes mistrza', emoji: '🧠', tier: 5, kind: 'permanent', unique: true, maxLevel: MAX_LEVEL, workFamily: 'xp', weight: 6, value: 4000,
+    desc: `STAŁY, działa zawsze. Kolejne sztuki podnoszą poziom (max ${MAX_LEVEL}): +${jobsCfg.XP_PER_LEVEL}% XP z pracy za poziom.`,
+    use: { type: 'none', message: 'Notes działa sam (więcej XP z pracy). Kolejne sztuki ze skrzyń podnoszą jego poziom.' },
+  },
+  zlota_teczka: {
+    id: 'zlota_teczka', name: 'Złota teczka', emoji: '💼', tier: 5, kind: 'permanent', unique: true, maxLevel: MAX_LEVEL, workFamily: 'pay', weight: 6, value: 4000,
+    desc: `STAŁA, działa zawsze. Kolejne sztuki podnoszą poziom (max ${MAX_LEVEL}): +${jobsCfg.PAY_PER_LEVEL}% monet z pracy za poziom.`,
+    use: { type: 'none', message: 'Teczka działa sama (więcej monet z pracy). Kolejne sztuki ze skrzyń podnoszą jej poziom.' },
+  },
+  dyplom: {
+    id: 'dyplom', name: 'Dyplom awansu', emoji: '🏆', tier: 5, kind: 'permanent', unique: true, maxLevel: MAX_LEVEL, workFamily: 'promo', weight: 6, value: 4000,
+    desc: `STAŁY, działa zawsze. Kolejne sztuki podnoszą poziom (max ${MAX_LEVEL}): awans w pracy po ${jobsCfg.PROMO_PER_LEVEL}% mniejszej liczbie zmian za poziom.`,
+    use: { type: 'none', message: 'Dyplom działa sam (szybsze awanse w pracy). Kolejne sztuki ze skrzyń podnoszą jego poziom.' },
   },
   kufer: {
     id: 'kufer', name: 'Kufer Boba', emoji: '🧰', tier: 5, kind: 'consumable', weight: 60, value: 29600,
