@@ -229,28 +229,29 @@ const ITEMS = {
     use: { type: 'none', message: 'Wschód słońca działa sam (większa szansa na przedmiot w dziennej skrzyni). Kolejne sztuki ze skrzyń podnoszą jego poziom.' },
   },
 
+  // ---- SPRZĘT DO NAPADÓW (drabinka: Wytrych 0 -> Łom/Krótkofalówka 1 -> Mapa 2 -> Przebranie 3; wagi wyższe niż kiedyś, żeby dało się go realnie zdobyć) ----
   wytrych: {
-    id: 'wytrych', name: 'Wytrych', emoji: '🔑', tier: 2, kind: 'consumable', weight: 0.4, value: 1200,
+    id: 'wytrych', name: 'Wytrych', emoji: '🔑', tier: 0, kind: 'consumable', weight: 1.5, value: 150,
     desc: 'Do napadów: zużywa się przy starcie napadu, który go wymaga (`/napad`).',
     use: { type: 'none', message: 'Wytrych zużyje się sam, gdy zaczniesz napad, który go wymaga. Zobacz /napad.' },
   },
   lom: {
-    id: 'lom', name: 'Łom', emoji: '🔩', tier: 1, kind: 'consumable', weight: 0.4, value: 400,
+    id: 'lom', name: 'Łom', emoji: '🔩', tier: 1, kind: 'consumable', weight: 1.5, value: 400,
     desc: 'Do napadów: zużywa się przy starcie napadu, który go wymaga (`/napad`).',
     use: { type: 'none', message: 'Łom zużyje się sam, gdy zaczniesz napad, który go wymaga. Zobacz /napad.' },
   },
   krotkofalowka: {
-    id: 'krotkofalowka', name: 'Krótkofalówka', emoji: '📻', tier: 1, kind: 'consumable', weight: 0.4, value: 500,
+    id: 'krotkofalowka', name: 'Krótkofalówka', emoji: '📻', tier: 1, kind: 'consumable', weight: 1.5, value: 500,
     desc: 'Do napadów: zużywa się przy starcie napadu, który go wymaga (`/napad`).',
     use: { type: 'none', message: 'Krótkofalówka zużyje się sam, gdy zaczniesz napad, który go wymaga. Zobacz /napad.' },
   },
   mapa: {
-    id: 'mapa', name: 'Mapa', emoji: '🗺️', tier: 2, kind: 'consumable', weight: 0.4, value: 800,
+    id: 'mapa', name: 'Mapa', emoji: '🗺️', tier: 2, kind: 'consumable', weight: 1, value: 800,
     desc: 'Do napadów: zużywa się przy starcie napadu, który go wymaga (`/napad`).',
     use: { type: 'none', message: 'Mapa zużyje się sam, gdy zaczniesz napad, który go wymaga. Zobacz /napad.' },
   },
   przebranie: {
-    id: 'przebranie', name: 'Przebranie', emoji: '🎭', tier: 3, kind: 'consumable', weight: 0.4, value: 1500,
+    id: 'przebranie', name: 'Przebranie', emoji: '🎭', tier: 3, kind: 'consumable', weight: 0.8, value: 1500,
     desc: 'Do napadów: zużywa się przy starcie napadu, który go wymaga (`/napad`).',
     use: { type: 'none', message: 'Przebranie zużyje się sam, gdy zaczniesz napad, który go wymaga. Zobacz /napad.' },
   },
@@ -330,7 +331,7 @@ const ITEMS = {
 //   tier (pojedynczy) = tylko wygląd/komentarz Boba
 const CHESTS = {
   chest_braz: {
-    id: 'chest_braz', name: 'Skrzynia Brązowa', emoji: '🟤', tier: 1, price: 320,
+    id: 'chest_braz', name: 'Skrzynia Brązowa', emoji: '🟤', tier: 1, price: 360, // 320 -> 360: łom i krótkofalówka wypadają częściej, cena wraca do ok. 75% zwrotu
     coins: null, itemChance: 1.0,
     tiers: [[0, 50], [1, 40], [2, 10]],
   },

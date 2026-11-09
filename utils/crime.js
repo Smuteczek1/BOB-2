@@ -303,7 +303,7 @@ async function settleRun({ guildId, runId, results, now = Date.now() }) {
       const r = results[u] ?? { hits: 0, rounds: 1, stagesPassed: false };
       const entry = { passed: Boolean(r.stagesPassed), loot: 0, fine: 0, jailUntil: 0, balance: null };
       if (success) {
-        entry.loot = H.lootFor(heist, r.rounds ? r.hits / r.rounds : 0, players.length);
+        entry.loot = H.lootFor(heist, r.rounds ? r.hits / r.rounds : 0, players.length, String(u) === String(run.leader_id));
         entry.balance = await db.applyCredit(c, guildId, u, entry.loot, `crime_${heist.id}`, true);
       } else if (!r.stagesPassed) {
         const acc = await c.query('SELECT balance FROM economy_accounts WHERE guild_id = $1 AND user_id = $2 FOR UPDATE', [guildId, u]);

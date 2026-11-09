@@ -383,7 +383,7 @@ function lobbyPayload(lobby, { disabled = false, final = null } = {}) {
     text(
       `## ${h.emoji} ${h.name}: ${lobby.phase === 'lobby' ? 'zbiórka ekipy' : 'akcja trwa'}\n` +
       `-# Banda **${lobby.gang.name}** · lider <@${lobby.leaderId}> · ekipa: **${lobby.players.length}** (wymagane ${h.min}-${h.max})\n` +
-      `-# Sprzęt (zabiera się liderowi przy starcie): ${H.itemsText(h.items, Object.fromEntries(Object.keys(h.items).map((i) => [i, itemName(i)])))}\n-# Etapy: ${stages}`,
+      `-# Sprzęt (zabiera się liderowi przy starcie): ${H.itemsText(h.items, Object.fromEntries(Object.keys(h.items).map((i) => [i, itemName(i)])))}\n-# Etapy: ${stages}\n-# Łup: ${range(h.loot)} na osobę · lider (płaci sprzętem) dostaje +${Math.round(H.LEADER_BONUS * 100)}%`,
     ),
   );
   box.addSeparatorComponents(sep());

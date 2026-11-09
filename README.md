@@ -224,7 +224,7 @@ Zużywają się przy tej jednej grze, a zwrot jest liczony w tej samej transakcj
 **Bezpieczeństwo:** zakup, zużycie przedmiotu, wypłata i wpis w dzienniku zawsze dzieją się w jednej transakcji.
 Jeśli coś się nie uda (limit losów, brak środków, drugi modyfikator), transakcja jest cofana, a przedmiot nie ginie.
 
-**Wytrych** jest w katalogu, ale nie wypada ze skrzyń, dopóki nie będzie napadu (`weight: 0`).
+**Sprzęt do napadów** wypada ze skrzyń: Wytrych (poziom 0, pospolity), Łom i Krótkofalówka (1), Mapa (2), Przebranie (3). Szansę zmieniasz polem `weight` w `utils/items.js`.
 Kolory nicków dojdą później.
 
 ### Jak działa /reset
@@ -366,9 +366,9 @@ więc możesz dodać bota do wielu serwerów bez żadnych konfliktów.
 - Tabele tworzą się same przy pierwszym użyciu (nowe kolumny dodawane automatycznie).
 
 ### Napady (`/napad`) i bandy (`/banda`)
-- **Małe napady** (kiosk, kradzież auta, jubiler, magazyn, galeria): solo albo z ekipą z bandy (do 3 osób, +10% łupu za każdą dodatkową osobę). **Duże skoki** (bank, kasyno, skarbiec, złoty pociąg): tylko ekipa z jednej bandy (3-8 osób), każdy gra swój etap, wszyscy dostają duży łup.
+- **Małe napady** (kiosk, kradzież auta, jubiler, magazyn, galeria): solo albo z ekipą z bandy (do 3 osób, +10% łupu za każdą dodatkową osobę). **Duże skoki** (bank, kasyno, skarbiec, złoty pociąg): tylko ekipa z jednej bandy (3-8 osób), każdy gra swój etap, wszyscy dostają duży łup (x2 względem sprzętu), a lider, który płaci sprzętem, dostaje dodatkowe +15% (`LEADER_BONUS`).
 - Napad to mini-gry: każdy etap to jedna z gier (pamięć / rachunki / dopasowanie) w roli włamywacza, kierowcy, hakera, planisty albo łamacza sejfów. Etap zdaje się, gdy poprawna jest co najmniej połowa rund. Łup rośnie z liczbą poprawnych odpowiedzi.
-- Napad wymaga **sprzętu** (Wytrych, Łom, Krótkofalówka, Mapa, Przebranie; wypadają ze skrzyń i krążą na `/rynek`), który zabiera się liderowi przy starcie. Małe napady wymagają 1-3 przedmiotów, duże skoki kilkunastu.
+- Napad wymaga **sprzętu** (Wytrych, Łom, Krótkofalówka, Mapa, Przebranie; wypadają ze skrzyń i krążą na `/rynek`), który zabiera się liderowi przy starcie. **Łup liczy się ze sprzętu:** każda sztuka dokłada swój przedział do łupu napadu (tabela `GEAR_LOOT` w `utils/heists.js`: Wytrych 600-1200, Łom 800-2400, Krótkofalówka 700-2000, Mapa 1500-4000, Przebranie 3000-8000). Kiosk = 1 Wytrych (600-1200), kradzież auta = 1 Łom (800-2400); im więcej i lepszego sprzętu wymaga napad, tym większa nagroda (galeria do 14 400, złoty pociąg do 97 600 na osobę). Wszystkie dane napadów (sprzęt, łup, kary) są w `utils/heists.js`.
 - **Porażka:** grzywna (część salda z dolnym i górnym limitem, nigdy poniżej zera) i areszt (20-120 min; w areszcie nie działa `/praca` ani napady). Najmniejsze napady kończą się samym mandatem. W skoku grupowym karę dostają tylko ci, którzy nie zaliczyli swojego etapu.
 - Łup to monety z gry (od Boba), a nie z kieszeni graczy. Limit: 3 napady dziennie na osobę (`HEIST_DAILY_LIMIT`).
 - **Bandy:** `/banda` (zakładanie, zaproszenia ważne 48 h, wyrzucanie, wychodzenie). Maks. 2 bandy na gracza i 8 osób w bandzie. Zbiórka ekipy pojawia się na kanale z przyciskami Dołącz / Start / Anuluj (4 min), a potem każdy uczestnik klika „Wejdź do akcji” i gra swój etap prywatnie (6 min).
