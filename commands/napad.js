@@ -47,7 +47,7 @@ const missingText = (missing) => Object.entries(missing).map(([id, n]) => `${ite
 
 function errorText(r, heist) {
   switch (r.reason) {
-    case 'level': return `🔒 ${r.userId ? `<@${r.userId}> ma za niski poziom` : 'Za niski poziom'} (potrzeba **${r.need}**).`;
+    case 'level': return `🔒 ${r.userId ? `<@${r.userId}> ma za niski poziom przestępczy` : 'Za niski poziom przestępczy'} (potrzeba **${r.need}**).`;
     case 'jail': return `🚔 ${r.userId ? `<@${r.userId}> jest` : 'Jesteś'} w areszcie do <t:${ts(r.until)}:t> (<t:${ts(r.until)}:R>).`;
     case 'cap': return `⛔ ${r.userId ? `<@${r.userId}> wykonał` : 'Wykonałeś'} już dzisiaj maksymalną liczbę napadów (${H.DAILY_LIMIT}).`;
     case 'items': return `🎒 Brakuje sprzętu: ${missingText(r.missing)}. Zdobędziesz go ze skrzyń albo na \`/rynek\`.`;
@@ -157,18 +157,21 @@ class StageGame {
 }
 
 // ---------------- WYNIK ----------------
+// Dopisek o EXP przestępczym (i awansie), pusty gdy EXP = 0
+const xpText = (e) => (e?.xp > 0 ? ` ✨ **+${e.xp} EXP**${e.level > e.oldLevel ? ` · 🆙 poziom przestępczy **${e.level}**!` : ''}` : '');
+
 function outcomeLine(res, userId) {
   const e = res.players[userId];
   const h = res.heist;
   if (!e) return '';
-  if (res.success) return `🎉 **${h.emoji} ${h.name}: udało się!** Łup: ${coin(e.loot)} (saldo: ${coin(e.balance)}).`;
+  if (res.success) return `🎉 **${h.emoji} ${h.name}: udało się!** Łup: ${coin(e.loot)} (saldo: ${coin(e.balance)}).${xpText(e)}`;
   if (!e.passed) {
     const parts = [`🚨 **Wpadka!**`];
     if (e.fine > 0) parts.push(`${h.jail > 0 ? 'Grzywna' : 'Mandat'}: ${coin(e.fine)}.`);
     if (e.jailUntil) parts.push(`Areszt do <t:${ts(e.jailUntil)}:t> (<t:${ts(e.jailUntil)}:R>): w tym czasie nie działa \`/praca\` ani napady.`);
     return parts.join(' ');
   }
-  return '💥 Ekipa nie dała rady, ale ty swój etap zaliczyłeś: bez kary, ale i bez łupu.';
+  return `💥 Ekipa nie dała rady, ale ty swój etap zaliczyłeś: bez kary, ale i bez łupu.${xpText(e)}`;
 }
 
 // ---------------- MENU PRYWATNE ----------------
@@ -182,19 +185,14 @@ function newSession(interaction) {
   };
 }
 
-async function getUserLevel(guildId, userId) {
-  const res = await db.raw.query('SELECT level FROM user_levels WHERE guild_id = $1 AND user_id = $2', [guildId, userId]);
-  return Number(res.rows[0]?.level ?? 0);
-}
-
 async function mainPanel(session, disabled) {
   const { state } = session;
-  const [profile, level, inv, gangs] = await Promise.all([
+  const [profile, inv, gangs] = await Promise.all([
     crime.getProfile(session.guildId, session.user.id),
-    getUserLevel(session.guildId, session.user.id),
     inventory.getInventory(session.guildId, session.user.id),
     crime.getMyGangs(session.guildId, session.user.id),
   ]);
+  const level = profile.level; // poziom przestępczy
   const owned = Object.fromEntries(inv.map((r) => [r.itemId, Number(r.quantity)]));
   const gang = gangs.find((g) => g.id === state.gangId) ?? gangs[0] ?? null;
   state.gangId = gang?.id ?? null;
@@ -208,7 +206,7 @@ async function mainPanel(session, disabled) {
   const kit = ['wytrych', 'lom', 'krotkofalowka', 'mapa', 'przebranie'].map((id) => `${items.ITEMS[id].emoji}${owned[id] ?? 0}`).join(' ');
   box.addTextDisplayComponents(
     text(
-      `## 🕵️ Napady\n-# Poziom serwerowy: **${level}** · napady dziś: **${profile.heistsToday}/${H.DAILY_LIMIT}** · sprzęt: ${kit}\n` +
+      `## 🕵️ Napady\n-# Poziom przestępczy: **${level}** (EXP: ${profile.into}/${profile.need}) · napady dziś: **${profile.heistsToday}/${H.DAILY_LIMIT}** · sprzęt: ${kit}\n` +
       (profile.jailUntil ? `🚔 **Areszt** do <t:${ts(profile.jailUntil)}:t> (<t:${ts(profile.jailUntil)}:R>): nie możesz napadać ani pracować.` : `-# Porażka = grzywna i areszt (blokada \`/praca\`). Łup to monety od Boba.`),
     ),
   );
@@ -235,7 +233,7 @@ async function mainPanel(session, disabled) {
     );
   }
   if (state.tab === 'big' || state.crew) {
-    box.addTextDisplayComponents(text(gang ? `-# Banda do skoków: **${gang.name}** (${gang.members.length} os.). Zbiórka ekipy pojawi się na kanale.` : '-# Duże skoki wymagają bandy. Załóż ją lub dołącz przez `/banda`.'));
+    box.addTextDisplayComponents(text(gang ? `-# Banda do skoków: **${gang.name}** (${gang.members.length} os. · doświadczenie bandy: **${gang.xp.toLocaleString('pl-PL')}** EXP). Zbiórka ekipy pojawi się na kanale.` : '-# Duże skoki wymagają bandy. Załóż ją lub dołącz przez `/banda`.'));
   }
 
   const list = H.HEIST_LIST.filter((h) => h.size === state.tab);
@@ -382,7 +380,7 @@ function lobbyPayload(lobby, { disabled = false, final = null } = {}) {
   box.addTextDisplayComponents(
     text(
       `## ${h.emoji} ${h.name}: ${lobby.phase === 'lobby' ? 'zbiórka ekipy' : 'akcja trwa'}\n` +
-      `-# Banda **${lobby.gang.name}** · lider <@${lobby.leaderId}> · ekipa: **${lobby.players.length}** (wymagane ${h.min}-${h.max})\n` +
+      `-# Banda **${lobby.gang.name}** (doświadczenie: **${(lobby.gang.xp ?? 0).toLocaleString('pl-PL')}** EXP) · lider <@${lobby.leaderId}> · ekipa: **${lobby.players.length}** (wymagane ${h.min}-${h.max})\n` +
       `-# Sprzęt (zabiera się liderowi przy starcie): ${H.itemsText(h.items, Object.fromEntries(Object.keys(h.items).map((i) => [i, itemName(i)])))}\n-# Etapy: ${stages}\n-# Łup: ${range(h.loot)} na osobę · lider (płaci sprzętem) dostaje +${Math.round(H.LEADER_BONUS * 100)}%`,
     ),
   );
@@ -473,9 +471,9 @@ async function runLobby(session, lobby, message, key) {
     if (!res.ok) return finish('⌛ Ten napad został już rozliczony.');
     const lines = lobby.players.map((u) => {
       const e = res.players[u];
-      if (res.success) return `🎉 <@${u}>: łup ${coin(e.loot)}`;
+      if (res.success) return `🎉 <@${u}>: łup ${coin(e.loot)}${xpText(e)}`;
       if (!e.passed) return `🚨 <@${u}>: wpadka${e.fine ? `, ${res.heist.jail ? 'grzywna' : 'mandat'} ${coin(e.fine)}` : ''}${e.jailUntil ? `, areszt do <t:${ts(e.jailUntil)}:t>` : ''}`;
-      return `💥 <@${u}>: swój etap zaliczył(a), ale ekipa polegała`;
+      return `💥 <@${u}>: swój etap zaliczył(a), ale ekipa polegała${xpText(e)}`;
     });
     const head = res.success ? `### 🎉 Skok udany! ${res.heist.emoji} ${res.heist.name}` : `### 🚨 Skok nieudany: ${res.heist.emoji} ${res.heist.name}`;
     await finish(`${head}\n${lines.join('\n')}`);
@@ -494,8 +492,8 @@ async function runLobby(session, lobby, message, key) {
           const gangs = await crime.getMyGangs(guildId, uid);
           if (!gangs.some((g) => g.id === lobby.gang.id)) return fail('Dołączyć mogą tylko członkowie tej bandy.');
           if (busyUsers.has(`${guildId}:${uid}`)) return fail('Bierzesz już udział w innej akcji.');
-          const [profile, level] = await Promise.all([crime.getProfile(guildId, uid), getUserLevel(guildId, uid)]);
-          if (level < lobby.heist.minLevel) return fail(`Za niski poziom (potrzeba ${lobby.heist.minLevel}).`);
+          const profile = await crime.getProfile(guildId, uid);
+          if (profile.level < lobby.heist.minLevel) return fail(`Za niski poziom przestępczy (potrzeba ${lobby.heist.minLevel}).`);
           if (profile.jailUntil) return fail('Jesteś w areszcie.');
           if (profile.left <= 0) return fail('Wykonałeś już dzisiaj maksymalną liczbę napadów.');
           lobby.players.push(uid);

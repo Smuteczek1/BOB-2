@@ -95,8 +95,8 @@ async function buildPanel(session, { disabled = false } = {}) {
     box.addTextDisplayComponents(text('_Nie należysz do żadnej bandy. Załóż własną albo przyjmij zaproszenie._'));
   } else {
     const isLeader = gang.leaderId === session.user.id;
-    const members = gang.members.map((m) => `${m.userId === gang.leaderId ? '👑' : '▫️'} <@${m.userId}>`).join('\n');
-    box.addTextDisplayComponents(text(`### ${gang.name}\n-# Lider: <@${gang.leaderId}> · członkowie: **${gang.members.length}/${H.MAX_GANG_MEMBERS}**\n${members}`));
+    const members = gang.members.map((m) => `${m.userId === gang.leaderId ? '👑' : '▫️'} <@${m.userId}> · poziom przestępczy **${m.level}**`).join('\n');
+    box.addTextDisplayComponents(text(`### ${gang.name}\n-# Lider: <@${gang.leaderId}> · członkowie: **${gang.members.length}/${H.MAX_GANG_MEMBERS}** · doświadczenie bandy: **${gang.xp.toLocaleString('pl-PL')}** EXP (suma członków)\n${members}`));
 
     if (gangs.length > 1) {
       box.addActionRowComponents(

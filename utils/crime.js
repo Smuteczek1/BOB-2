@@ -20,6 +20,7 @@ function ensureSchema() {
         heists_today INT NOT NULL DEFAULT 0,
         PRIMARY KEY (guild_id, user_id)
       );
+      ALTER TABLE heist_profiles ADD COLUMN IF NOT EXISTS xp BIGINT NOT NULL DEFAULT 0;
       CREATE TABLE IF NOT EXISTS gangs (
         id BIGSERIAL PRIMARY KEY,
         guild_id TEXT NOT NULL,
@@ -81,7 +82,8 @@ async function getProfile(guildId, userId, now = Date.now()) {
   return db.withTransaction(async (c) => {
     const row = await readProfile(c, guildId, userId, now);
     const jailUntil = Number(row.jail_until);
-    return { jailUntil: jailUntil > now ? jailUntil : 0, heistsToday: row.heists_today, left: Math.max(0, H.DAILY_LIMIT - row.heists_today) };
+    const xp = Number(row.xp ?? 0);
+    return { jailUntil: jailUntil > now ? jailUntil : 0, heistsToday: row.heists_today, left: Math.max(0, H.DAILY_LIMIT - row.heists_today), xp, ...H.crimeProgress(xp) };
   });
 }
 
@@ -107,15 +109,23 @@ async function gangsOf(c, guildId, userId) {
 }
 
 async function membersOf(c, gangId) {
-  const res = await c.query('SELECT user_id, joined_at FROM gang_members WHERE gang_id = $1 ORDER BY joined_at, user_id', [gangId]);
-  return res.rows.map((r) => ({ userId: r.user_id, joinedAt: Number(r.joined_at) }));
+  const res = await c.query(
+    `SELECT m.user_id, m.joined_at, COALESCE(p.xp, 0) AS xp
+     FROM gang_members m LEFT JOIN heist_profiles p ON p.guild_id = m.guild_id AND p.user_id = m.user_id
+     WHERE m.gang_id = $1 ORDER BY m.joined_at, m.user_id`,
+    [gangId],
+  );
+  return res.rows.map((r) => ({ userId: r.user_id, joinedAt: Number(r.joined_at), xp: Number(r.xp), level: H.crimeLevelForXp(Number(r.xp)) }));
 }
 
 // Moje bandy (max 2) z członkami
 async function getMyGangs(guildId, userId) {
   await ensureSchema();
   const gangs = await gangsOf(db.raw, guildId, userId);
-  for (const g of gangs) g.members = await membersOf(db.raw, g.id);
+  for (const g of gangs) {
+    g.members = await membersOf(db.raw, g.id);
+    g.xp = g.members.reduce((a, m) => a + m.xp, 0); // doświadczenie bandy = suma EXP członków
+  }
   return gangs;
 }
 
@@ -263,7 +273,7 @@ async function startRun({ guildId, heistId, leaderId, playerIds, gangId = null, 
     }
     for (const u of sorted) {
       const row = await readProfile(c, guildId, u, now);
-      const lvl = Number((await c.query('SELECT level FROM user_levels WHERE guild_id = $1 AND user_id = $2', [guildId, u])).rows[0]?.level ?? 0);
+      const lvl = H.crimeLevelForXp(Number(row.xp ?? 0)); // poziom przestępczy (EXP z napadów), nie serwerowy
       if (lvl < heist.minLevel) return { ok: false, reason: 'level', userId: u, need: heist.minLevel };
       if (Number(row.jail_until) > now) return { ok: false, reason: 'jail', userId: u, until: Number(row.jail_until) };
       if (row.heists_today >= H.DAILY_LIMIT) return { ok: false, reason: 'cap', userId: u };
@@ -301,7 +311,7 @@ async function settleRun({ guildId, runId, results, now = Date.now() }) {
     const out = {};
     for (const u of [...players].sort()) {
       const r = results[u] ?? { hits: 0, rounds: 1, stagesPassed: false };
-      const entry = { passed: Boolean(r.stagesPassed), loot: 0, fine: 0, jailUntil: 0, balance: null };
+      const entry = { passed: Boolean(r.stagesPassed), loot: 0, fine: 0, jailUntil: 0, balance: null, xp: 0, level: null, oldLevel: null };
       if (success) {
         entry.loot = H.lootFor(heist, r.rounds ? r.hits / r.rounds : 0, players.length, String(u) === String(run.leader_id));
         entry.balance = await db.applyCredit(c, guildId, u, entry.loot, `crime_${heist.id}`, true);
@@ -321,6 +331,14 @@ async function settleRun({ guildId, runId, results, now = Date.now() }) {
           entry.jailUntil = now + heist.jail * 60_000;
           await c.query('UPDATE heist_profiles SET jail_until = GREATEST(jail_until, $3::bigint) WHERE guild_id = $1 AND user_id = $2', [guildId, u, entry.jailUntil]);
         }
+      }
+      // EXP przestępczy (osobno od EXP serwerowego): do profilu gracza, a doświadczenie bandy liczy się jako suma jej członków
+      entry.xp = H.xpFor(heist, { success, passed: entry.passed, performance: r.rounds ? r.hits / r.rounds : 0 });
+      if (entry.xp > 0) {
+        const upd = await c.query('UPDATE heist_profiles SET xp = xp + $3::bigint WHERE guild_id = $1 AND user_id = $2 RETURNING xp', [guildId, u, entry.xp]);
+        const total = Number(upd.rows[0]?.xp ?? entry.xp);
+        entry.oldLevel = H.crimeLevelForXp(total - entry.xp);
+        entry.level = H.crimeLevelForXp(total);
       }
       out[u] = entry;
     }
