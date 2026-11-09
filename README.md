@@ -364,3 +364,12 @@ więc możesz dodać bota do wielu serwerów bez żadnych konfliktów.
 - Oferty: 4 losowe prace dziennie (inne dla każdego gracza), zmiana pracy raz dziennie.
 - Zasiłek dla bezrobotnych (60 🪙, `WORK_BENEFIT`): po jego odebraniu danego dnia nie można pracować.
 - Tabele tworzą się same przy pierwszym użyciu (nowe kolumny dodawane automatycznie).
+
+### Napady (`/napad`) i bandy (`/banda`)
+- **Małe napady** (kiosk, kradzież auta, jubiler, magazyn, galeria): solo albo z ekipą z bandy (do 3 osób, +10% łupu za każdą dodatkową osobę). **Duże skoki** (bank, kasyno, skarbiec, złoty pociąg): tylko ekipa z jednej bandy (3-8 osób), każdy gra swój etap, wszyscy dostają duży łup.
+- Napad to mini-gry: każdy etap to jedna z gier (pamięć / rachunki / dopasowanie) w roli włamywacza, kierowcy, hakera, planisty albo łamacza sejfów. Etap zdaje się, gdy poprawna jest co najmniej połowa rund. Łup rośnie z liczbą poprawnych odpowiedzi.
+- Napad wymaga **sprzętu** (Wytrych, Łom, Krótkofalówka, Mapa, Przebranie; wypadają ze skrzyń i krążą na `/rynek`), który zabiera się liderowi przy starcie. Małe napady wymagają 1-3 przedmiotów, duże skoki kilkunastu.
+- **Porażka:** grzywna (część salda z dolnym i górnym limitem, nigdy poniżej zera) i areszt (20-120 min; w areszcie nie działa `/praca` ani napady). Najmniejsze napady kończą się samym mandatem. W skoku grupowym karę dostają tylko ci, którzy nie zaliczyli swojego etapu.
+- Łup to monety z gry (od Boba), a nie z kieszeni graczy. Limit: 3 napady dziennie na osobę (`HEIST_DAILY_LIMIT`).
+- **Bandy:** `/banda` (zakładanie, zaproszenia ważne 48 h, wyrzucanie, wychodzenie). Maks. 2 bandy na gracza i 8 osób w bandzie. Zbiórka ekipy pojawia się na kanale z przyciskami Dołącz / Start / Anuluj (4 min), a potem każdy uczestnik klika „Wejdź do akcji” i gra swój etap prywatnie (6 min).
+- Tabele powstają same przy pierwszym użyciu (`heist_profiles`, `gangs`, `gang_members`, `gang_invites`, `heist_runs`).

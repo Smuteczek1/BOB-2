@@ -152,6 +152,18 @@ const PICK_BANK = {
     { q: 'Jednostką natężenia prądu jest:', ok: 'Amper', bad: ['Wolt', 'Wat', 'Metr'] },
     { q: 'Do czego służy miernik uniwersalny?', ok: 'Do pomiaru napięcia i oporu', bad: ['Do wbijania gwoździ', 'Do cięcia kabli', 'Do malowania ścian'] },
   ],
+  napad: [
+    { q: 'Co robisz, gdy słyszysz alarm w trakcie akcji?', ok: 'Trzymasz się planu wyjścia', bad: ['Krzyczysz do kamery', 'Siadasz i czekasz', 'Dzwonisz do znajomych'] },
+    { q: 'Kiedy najlepiej wejść do budynku?', ok: 'Gdy ochrona zmienia zmianę', bad: ['W środku dnia głównym wejściem', 'Zaraz po otwarciu', 'Gdy jest pełno ludzi'] },
+    { q: 'Do czego służy krótkofalówka w ekipie?', ok: 'Do cichej łączności', bad: ['Do słuchania muzyki', 'Do otwierania drzwi', 'Do wyłączania kamer'] },
+    { q: 'Co sprawdzasz na mapie przed akcją?', ok: 'Drogi ucieczki', bad: ['Pogodę za tydzień', 'Ceny w sklepie', 'Numery telefonów'] },
+    { q: 'Po co przebranie?', ok: 'Żeby nikt cię nie rozpoznał', bad: ['Żeby było cieplej', 'Dla zabawy', 'Żeby otworzyć sejf'] },
+    { q: 'Kto prowadzi samochód w trakcie ucieczki?', ok: 'Kierowca', bad: ['Haker', 'Planista', 'Ochroniarz'] },
+    { q: 'Co jest najważniejsze przed skokiem?', ok: 'Dobry plan', bad: ['Głośna muzyka', 'Pełny brzuch', 'Nowe buty'] },
+    { q: 'Co zrobisz z kamerą na korytarzu?', ok: 'Ominiesz jej pole widzenia', bad: ['Pomachasz do niej', 'Zaczekasz pod nią', 'Przesuniesz ją na wprost'] },
+    { q: 'Ile osób powinno znać plan?', ok: 'Tylko ekipa', bad: ['Całe miasto', 'Każdy sąsiad', 'Ochrona budynku'] },
+    { q: 'Co po udanej akcji?', ok: 'Zniknąć bez śladu', bad: ['Zrobić selfie', 'Wrócić po zapomnianą rzecz', 'Zostawić wizytówkę'] },
+  ],
   programista: [
     { q: 'Aplikacja się zawiesza. Co sprawdzasz najpierw?', ok: 'Logi błędów', bad: ['Kolor tła', 'Czcionkę w menu', 'Tapetę na pulpicie'] },
     { q: 'Co robisz przed zmianą w działającym systemie?', ok: 'Testuję i robię kopię zapasową', bad: ['Zmieniam bez testów', 'Kasuję bazę danych', 'Wyłączam monitoring'] },

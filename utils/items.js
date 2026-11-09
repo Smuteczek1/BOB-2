@@ -97,12 +97,12 @@ const ITEMS = {
     use: { type: 'arm_luck', bonus: ONCE_BONUS },
   },
   kawa: {
-    id: 'kawa', name: 'Kawa', emoji: '☕', tier: 0, kind: 'consumable', weight: 0.4, value: 60,
+    id: 'kawa', name: 'Kawa', emoji: '☕', tier: 0, kind: 'consumable', weight: 0.3, value: 60,
     desc: 'Do pracy: +15 energii (nie więcej niż maksimum).',
     use: { type: 'work_energy', amount: 15 },
   },
   przekaska: {
-    id: 'przekaska', name: 'Przekąska', emoji: '🥪', tier: 0, kind: 'consumable', weight: 0.4, value: 45,
+    id: 'przekaska', name: 'Przekąska', emoji: '🥪', tier: 0, kind: 'consumable', weight: 0.3, value: 45,
     desc: 'Do pracy: +10 energii (nie więcej niż maksimum).',
     use: { type: 'work_energy', amount: 10 },
   },
@@ -132,12 +132,12 @@ const ITEMS = {
     bonus: { chance: 0.25, grant: 'darmowy_los', text: 'darmowy los', onlyIfRefund: true },
   },
   energetyk: {
-    id: 'energetyk', name: 'Energetyk', emoji: '🥤', tier: 1, kind: 'consumable', weight: 0.4, value: 150,
+    id: 'energetyk', name: 'Energetyk', emoji: '🥤', tier: 1, kind: 'consumable', weight: 0.3, value: 150,
     desc: 'Do pracy: +30 energii (nie więcej niż maksimum).',
     use: { type: 'work_energy', amount: 30 },
   },
   karta_przerwy: {
-    id: 'karta_przerwy', name: 'Karta przerwy', emoji: '🪪', tier: 1, kind: 'consumable', weight: 0.4, value: 90,
+    id: 'karta_przerwy', name: 'Karta przerwy', emoji: '🪪', tier: 1, kind: 'consumable', weight: 0.3, value: 90,
     desc: 'Do pracy: kończy przerwę między zadaniami, więc możesz od razu zagrać kolejną mini-grę.',
     use: { type: 'work_reset' },
   },
@@ -168,12 +168,12 @@ const ITEMS = {
     bonus: { chance: 0.25, grant: 'darmowy_los', text: 'darmowy los', onlyIfRefund: true },
   },
   premia: {
-    id: 'premia', name: 'Premia', emoji: '💵', tier: 2, kind: 'consumable', weight: 0.4, value: 260,
+    id: 'premia', name: 'Premia', emoji: '💵', tier: 2, kind: 'consumable', weight: 0.3, value: 260,
     desc: 'Do pracy: następna zmiana albo zadanie daje +50% monet.',
     use: { type: 'work_boost', pay: 50 },
   },
   szkolenie: {
-    id: 'szkolenie', name: 'Szkolenie', emoji: '🎓', tier: 2, kind: 'consumable', weight: 0.4, value: 240,
+    id: 'szkolenie', name: 'Szkolenie', emoji: '🎓', tier: 2, kind: 'consumable', weight: 0.3, value: 240,
     desc: 'Do pracy: następna zmiana albo zadanie daje +50% XP.',
     use: { type: 'work_boost', xp: 50 },
   },
@@ -192,7 +192,7 @@ const ITEMS = {
     bonus: { chance: 0.15, grant: 'klucz', text: 'Zapasowy klucz' },
   },
   mega_energetyk: {
-    id: 'mega_energetyk', name: 'Mega energetyk', emoji: '⚡', tier: 3, kind: 'consumable', weight: 0.4, value: 600,
+    id: 'mega_energetyk', name: 'Mega energetyk', emoji: '⚡', tier: 3, kind: 'consumable', weight: 0.3, value: 600,
     desc: 'Do pracy: +60 energii (nie więcej niż maksimum).',
     use: { type: 'work_energy', amount: 60 },
   },
@@ -230,9 +230,29 @@ const ITEMS = {
   },
 
   wytrych: {
-    id: 'wytrych', name: 'Wytrych', emoji: '🔑', tier: 4, kind: 'consumable', weight: 0, value: 800,
-    desc: 'Do napadu. (Napad będzie dostępny wkrótce, wytrych jeszcze nie wypada ze skrzyń.)',
-    use: { type: 'none', message: 'Napad jeszcze nie jest dostępny. Zachowaj wytrych na później!' },
+    id: 'wytrych', name: 'Wytrych', emoji: '🔑', tier: 2, kind: 'consumable', weight: 0.4, value: 1200,
+    desc: 'Do napadów: zużywa się przy starcie napadu, który go wymaga (`/napad`).',
+    use: { type: 'none', message: 'Wytrych zużyje się sam, gdy zaczniesz napad, który go wymaga. Zobacz /napad.' },
+  },
+  lom: {
+    id: 'lom', name: 'Łom', emoji: '🔩', tier: 1, kind: 'consumable', weight: 0.4, value: 400,
+    desc: 'Do napadów: zużywa się przy starcie napadu, który go wymaga (`/napad`).',
+    use: { type: 'none', message: 'Łom zużyje się sam, gdy zaczniesz napad, który go wymaga. Zobacz /napad.' },
+  },
+  krotkofalowka: {
+    id: 'krotkofalowka', name: 'Krótkofalówka', emoji: '📻', tier: 1, kind: 'consumable', weight: 0.4, value: 500,
+    desc: 'Do napadów: zużywa się przy starcie napadu, który go wymaga (`/napad`).',
+    use: { type: 'none', message: 'Krótkofalówka zużyje się sam, gdy zaczniesz napad, który go wymaga. Zobacz /napad.' },
+  },
+  mapa: {
+    id: 'mapa', name: 'Mapa', emoji: '🗺️', tier: 2, kind: 'consumable', weight: 0.4, value: 800,
+    desc: 'Do napadów: zużywa się przy starcie napadu, który go wymaga (`/napad`).',
+    use: { type: 'none', message: 'Mapa zużyje się sam, gdy zaczniesz napad, który go wymaga. Zobacz /napad.' },
+  },
+  przebranie: {
+    id: 'przebranie', name: 'Przebranie', emoji: '🎭', tier: 3, kind: 'consumable', weight: 0.4, value: 1500,
+    desc: 'Do napadów: zużywa się przy starcie napadu, który go wymaga (`/napad`).',
+    use: { type: 'none', message: 'Przebranie zużyje się sam, gdy zaczniesz napad, który go wymaga. Zobacz /napad.' },
   },
   skarbiec: {
     id: 'skarbiec', name: 'Skarbiec', emoji: '🏦', tier: 4, kind: 'consumable', weight: 60, value: 12275,

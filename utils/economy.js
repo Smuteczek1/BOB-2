@@ -36,6 +36,7 @@ const REASON_LABELS = {
   market_return_fallback: 'Rynek: rekompensata',
   work_benefit: 'Praca: zasiłek',
   work_order: 'Praca: zlecenie',
+  crime_fine: 'Napad: grzywna',
   skarbonka: 'Skarbonka: odsetki',
 };
 
@@ -82,6 +83,10 @@ function reasonLabel(reason) {
     if (reason.startsWith('work_')) {
       const job = require('./jobs').JOBS[reason.slice(5)];
       if (job) return `Praca: ${job.name}`;
+    }
+    if (reason.startsWith('crime_')) {
+      const heist = require('./heists').HEISTS[reason.slice(6)];
+      if (heist) return `Napad: ${heist.name}`;
     }
     const { ITEMS, CHESTS } = require('./items');
     if (reason.startsWith('shop_') && CHESTS[reason.slice(5)]) return `Sklep: ${CHESTS[reason.slice(5)].name}`;

@@ -17,6 +17,7 @@ const games = require('../utils/workGames');
 const items = require('../utils/items');
 const inventory = require('../utils/inventory');
 const itemUse = require('../utils/itemUse');
+const crime = require('../utils/crime');
 
 // ============================================================
 //  /praca: prywatne menu pracy (Components V2, jak /sklep i /rynek).
@@ -63,6 +64,7 @@ const ERRORS = {
 };
 function errorText(r) {
   if (r.reason === 'energy') return `⚡ Za mało energii (potrzeba ${r.need}, masz ${r.left}).${r.nextAt ? ` Następny punkt <t:${ts(r.nextAt)}:R>.` : ''} Pomoże Kawa albo Energetyk z ekwipunku.`;
+  if (r.reason === 'jail') return `🚔 Jesteś w areszcie do <t:${ts(r.until)}:t> (<t:${ts(r.until)}:R>). W tym czasie nie możesz pracować.`;
   if (r.reason === 'cooldown') return `⏳ Przerwa między zadaniami: następne zadanie lub zlecenie <t:${ts(r.readyAt)}:R>. Karta przerwy kończy ją od razu.`;
   if (r.reason === 'level') return `🔒 Ta praca wymaga poziomu serwerowego **${r.need}**. XP zdobywasz pisząc, rozmawiając na kanałach głosowych i pracując.`;
   if (r.reason === 'not_yet') return `⏳ Zmiana jeszcze trwa. Skończy się <t:${ts(r.endsAt)}:R>.`;
@@ -483,6 +485,11 @@ async function openMenu(interaction) {
     return;
   }
   await work.ensureSchema();
+  const jail = await crime.jailUntil(interaction.guild.id, interaction.user.id);
+  if (jail) {
+    await interaction.reply({ content: `🚔 Jesteś w areszcie do <t:${ts(jail)}:t> (<t:${ts(jail)}:R>). W tym czasie nie możesz korzystać z \`/praca\`.`, flags: MessageFlags.Ephemeral });
+    return;
+  }
   const session = newSession(interaction);
   await interaction.reply({ ...(await buildPanel(session)), flags: V2 | MessageFlags.Ephemeral });
   const message = await interaction.fetchReply();

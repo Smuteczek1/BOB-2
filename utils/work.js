@@ -2,6 +2,7 @@ const db = require('../db');
 const jobs = require('./jobs');
 const { levelForXp, announceIfMilestone } = require('./leveling');
 const { syncLevelRole } = require('./levelRoles');
+const crime = require('./crime');
 
 // ============================================================
 //  PRACE: energia, zmiany, kariera, zasiłek.
@@ -76,6 +77,7 @@ function ensureSchema() {
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_work_one_active ON work_shifts (guild_id, user_id) WHERE status = 'active';
       `)
+      .then(() => crime.ensureSchema()) // areszt z napadów blokuje pracę, więc tabele muszą istnieć
       .catch((err) => {
         schemaReady = null;
         throw err;
@@ -269,6 +271,8 @@ async function beginShift(guildId, userId, kind, now, orderIdx = null) {
       if (!order) return { ok: false, reason: 'no_order' };
       if (order.done) return { ok: false, reason: 'order_done' };
     }
+    const jail = await crime.jailUntil(guildId, userId, now, c); // areszt (po nieudanym napadzie) blokuje pracę
+    if (jail) return { ok: false, reason: 'jail', until: jail };
     const chk = startChecks(st, now, { cost: order ? order.energy : null, game: kind !== 'timed', needJob: !order });
     if (!chk.ok) return chk;
 
