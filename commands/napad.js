@@ -543,16 +543,28 @@ async function runLobby(session, lobby, message, key) {
         if (lobby.entered.has(uid)) return click.reply({ content: 'Już wszedłeś do akcji. Poszukaj swojego prywatnego okna (albo poczekaj na wynik).', flags: MessageFlags.Ephemeral });
         lobby.entered.add(uid);
         lobby.status[uid] = '🎮';
-        const stageGame = new StageGame(lobby.heist, lobby.assign[idx], 'ng_');
-        lobby.games[uid] = stageGame;
-        const build = (note, disabled = false) => {
-          const box = new ContainerBuilder().setAccentColor(0xc0392b);
-          if (note) box.addTextDisplayComponents(text(note)), box.addSeparatorComponents(sep());
-          box.addTextDisplayComponents(text(`-# ${lobby.heist.emoji} **${lobby.heist.name}** · twoje etapy w akcji ekipy. Zakończ przed <t:${ts(lobby.endsAt)}:t>.`));
-          stageGame.render(box, disabled);
-          return { components: [box], flags: V2 };
-        };
-        await click.reply({ ...build(null), flags: V2 | MessageFlags.Ephemeral });
+        let stageGame;
+        let build;
+        try {
+          stageGame = new StageGame(lobby.heist, lobby.assign[idx], 'ng_');
+          lobby.games[uid] = stageGame;
+          build = (note, disabled = false) => {
+            const box = new ContainerBuilder().setAccentColor(0xc0392b);
+            if (note) box.addTextDisplayComponents(text(note)), box.addSeparatorComponents(sep());
+            box.addTextDisplayComponents(text(`-# ${lobby.heist.emoji} **${lobby.heist.name}** · twoje etapy w akcji ekipy. Zakończ przed <t:${ts(lobby.endsAt)}:t>.`));
+            stageGame.render(box, disabled);
+            return { components: [box], flags: V2 };
+          };
+          await click.reply({ ...build(null), flags: V2 | MessageFlags.Ephemeral });
+        } catch (err) {
+          // nie udało się uruchomić okna gry: zwalniamy gracza, żeby mógł kliknąć jeszcze raz (zamiast „już wszedłeś do akcji”)
+          console.error('Napad: nie udało się wejść do akcji:', err);
+          lobby.entered.delete(uid);
+          delete lobby.status[uid];
+          delete lobby.games[uid];
+          if (!click.replied && !click.deferred) await click.reply({ content: '❌ Nie udało się uruchomić Twojego etapu. Kliknij „Wejdź do akcji” jeszcze raz.', flags: MessageFlags.Ephemeral }).catch(() => null);
+          return;
+        }
         update();
         const reply = await click.fetchReply();
         const pc = reply.createMessageComponentCollector({ filter: (i) => i.user.id === uid, idle: 5 * 60_000, time: H.ACTION_MS });
@@ -591,6 +603,8 @@ async function runLobby(session, lobby, message, key) {
       return click.deferUpdate().catch(() => null);
     } catch (err) {
       console.error('Napad: błąd w zbiórce/akcji:', err);
+      if (lobby.phase === 'lobby') lobby.starting = false; // błąd przy starcie nie może zablokować kolejnej próby
+      if (!click.replied && !click.deferred) await click.reply({ content: '❌ Coś poszło nie tak. Spróbuj ponownie.', flags: MessageFlags.Ephemeral }).catch(() => null);
     }
   });
 
