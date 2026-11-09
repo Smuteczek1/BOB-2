@@ -73,6 +73,10 @@ const stagePassed = (hits, rounds) => hits >= Math.ceil(rounds / 2);
 function assignStages(heist, playerCount) {
   const out = Array.from({ length: playerCount }, () => []);
   heist.stages.forEach((_, i) => out[i % playerCount].push(i));
+  // Gdy w ekipie jest więcej osób niż etapów, nadmiarowi gracze dublują etapy (każdy gra własną kopię),
+  // żeby nikt nie został bez zadania (pusta lista etapów wywalała grę przy wejściu do akcji).
+  const n = heist.stages.length;
+  for (let p = n; p < playerCount; p++) out[p].push(p % n);
   return out;
 }
 
