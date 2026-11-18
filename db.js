@@ -327,6 +327,7 @@ async function initDb() {
     // jeśli tabela guild_config już istniała bez nich
     await query(`
       ALTER TABLE guild_config
+        ADD COLUMN IF NOT EXISTS casino_log_channel_id TEXT,
         ADD COLUMN IF NOT EXISTS welcome_channel_id TEXT,
         ADD COLUMN IF NOT EXISTS welcome_message TEXT,
         ADD COLUMN IF NOT EXISTS goodbye_channel_id TEXT,
@@ -666,6 +667,19 @@ module.exports = {
         INSERT INTO guild_config (guild_id, levels_channel_id, created_at)
         VALUES ($1, $2, $3)
       `, [guildId, channelId, Date.now()]);
+    }
+  },
+
+  // --- Kanał wyników kasyna (channelId = null wyłącza) ---
+  async setCasinoLogChannel(guildId, channelId) {
+    const existing = await this.getGuildConfig(guildId);
+    if (existing) {
+      await query('UPDATE guild_config SET casino_log_channel_id = $1 WHERE guild_id = $2', [channelId ?? null, guildId]);
+    } else {
+      await query(`
+        INSERT INTO guild_config (guild_id, casino_log_channel_id, created_at)
+        VALUES ($1, $2, $3)
+      `, [guildId, channelId ?? null, Date.now()]);
     }
   },
 

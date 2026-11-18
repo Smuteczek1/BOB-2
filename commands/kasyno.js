@@ -320,11 +320,15 @@ async function openPublic(click, payload) {
   try {
     const channel = click.channel ?? (await click.client.channels.fetch(click.channelId));
     const message = await withRetry(() => channel.send(payload), 3);
-    return { edit: (p) => message.edit(p), send: (p) => channel.send(p) };
+    return { edit: (p) => message.edit(p), send: (p) => channel.send(p), remove: () => message.delete() };
   } catch {
     try {
       const message = await withRetry(() => click.followUp(payload), 3);
-      return { edit: (p) => click.webhook.editMessage(message.id, p), send: (p) => click.followUp(p) };
+      return {
+        edit: (p) => click.webhook.editMessage(message.id, p),
+        send: (p) => click.followUp(p),
+        remove: () => click.webhook.deleteMessage(message.id),
+      };
     } catch {
       return null;
     }
@@ -337,10 +341,49 @@ async function animate(pub, payload) {
   await pub.edit(payload).catch((err) => console.error('Kasyno: klatka animacji nie przeszła:', err.message));
 }
 
+async function getCasinoLogChannel({ client, guildId }) {
+  try {
+    const config = await db.getGuildConfig(guildId);
+    if (!config?.casino_log_channel_id) return null;
+    const channel = await client.channels.fetch(config.casino_log_channel_id);
+    return channel?.isTextBased?.() ? channel : null;
+  } catch (err) {
+    console.error('Kasyno: nie udało się pobrać kanału wyników:', err.message);
+    return null;
+  }
+}
+
+// Co pokazać w prywatnym menu po grze: gdy wynik poszedł na kanał wyników, gracz dostaje skrót i link
+const resultNotice = (shown, summary) => {
+  if (shown?.archivedTo) return `📜 Wynik trafił na <#${shown.archivedTo}>:\n${summary}`;
+  if (shown) return null;
+  return `⚠️ Nie udało się pokazać wyniku na kanale (brak uprawnień albo Discord jest przeciążony). Gra jest rozliczona, wynik:\n${summary}`;
+};
+
 // Wynik końcowy: pieniądze są już rozliczone w bazie, więc wynik MUSI dotrzeć do gracza.
 // 1) edycja wiadomości z grą (z ponowieniami), 2) nowa wiadomość z wynikiem, 3) false -> wynik pokaże prywatne menu.
-async function deliverFinal(pub, payload) {
+// Gdy serwer ma ustawiony kanał wyników (/setup-kasyno), wynik idzie TAM, a wiadomość z gry znika z kanału, na którym grano.
+// Wtedy zwraca { archivedTo: channelId }. Gdy kanału brak albo wysyłka się nie uda, zostaje zwykłe zachowanie (wynik w miejscu gry).
+// archive = { client, guildId, channelId } (channelId = kanał, na którym grano)
+async function deliverFinal(pub, payload, archive) {
   if (!pub) return false;
+
+  const logChannel = archive ? await getCasinoLogChannel(archive) : null;
+  if (logChannel) {
+    try {
+      const where = archive.channelId ? ` · <#${archive.channelId}>` : '';
+      await withRetry(() => logChannel.send({ ...payload, content: `${payload.content ?? ''}${where}`, allowedMentions: noPings }));
+      // Wynik już jest na kanale wyników. Wiadomość z gry usuwamy; jeśli się nie da, zostawiamy w niej wynik zamiast zawieszonej animacji.
+      await Promise.resolve(pub.remove?.()).catch(async (err) => {
+        console.error('Kasyno: nie usunięto wiadomości z gry:', err.message);
+        await pub.edit(payload).catch(() => null);
+      });
+      return { archivedTo: logChannel.id };
+    } catch (err) {
+      console.error('Kasyno: nie udało się wysłać wyniku na kanał wyników, zostaje w miejscu gry:', err.message);
+    }
+  }
+
   try {
     await withRetry(() => pub.edit(payload));
     return true;
@@ -409,7 +452,7 @@ async function playSlots(click, guildId, user, bet) {
     .setColor(style.color)
     .setTitle(`🎰 ${style.head}`)
     .setDescription(`# ${spin.reels.join(' | ')}\n${label}\n\n${resultLines(bet, payout, balance, insurance)}\n\n🥃 *Bob: ${style.quip}*`);
-  const shown = await deliverFinal(pub, { content: header, embeds: [embed], allowedMentions: noPings });
+  const shown = await deliverFinal(pub, { content: header, embeds: [embed], allowedMentions: noPings }, { client: click.client, guildId, channelId: click.channelId });
 
   return { balance, shown, summary: `🎰 ${spin.reels.join(' ')}: ${style.head} (stawka ${bet}, wypłata ${payout}, saldo ${balance})` };
 }
@@ -441,7 +484,7 @@ async function playRoulette(click, guildId, user, bet, kind, chosenNumber) {
       `Kula zatrzymała się na:\n# ${spin.color} ${spin.number}\n\n${resultLines(bet, payout, balance, insurance)}\n\n` +
       `🥃 *Bob: ${spin.number === 0 ? 'Zero. Dom wygrywa. Zawsze wygrywa.' : style.quip}*`,
     );
-  const shown = await deliverFinal(pub, { content: header, embeds: [embed], allowedMentions: noPings });
+  const shown = await deliverFinal(pub, { content: header, embeds: [embed], allowedMentions: noPings }, { client: click.client, guildId, channelId: click.channelId });
 
   return { balance, shown, summary: `🎡 ${spin.color} ${spin.number}: ${style.head} (stawka ${bet}, wypłata ${payout}, saldo ${balance})` };
 }
@@ -467,7 +510,7 @@ async function playCoin(click, guildId, user, bet, side) {
     .setColor(style.color)
     .setTitle(`🪙 ${style.head}`)
     .setDescription(`Wypadło:\n# ${SIDE_LABELS[flip.result]}\n\n${resultLines(bet, payout, balance, insurance)}\n\n🥃 *Bob: ${style.quip}*`);
-  const shown = await deliverFinal(pub, { content: header, embeds: [embed], allowedMentions: noPings });
+  const shown = await deliverFinal(pub, { content: header, embeds: [embed], allowedMentions: noPings }, { client: click.client, guildId, channelId: click.channelId });
 
   return { balance, shown, summary: `🪙 ${SIDE_LABELS[flip.result]}: ${style.head} (stawka ${bet}, wypłata ${payout}, saldo ${balance})` };
 }
@@ -502,13 +545,15 @@ async function bjFinish(session) {
       `**Gracz:** ${fmtCards(game.player)} = **${fmtTotal(game.player)}**\n\n` +
       `${resultLines(stake, payout, balance, insurance)}\n\n🥃 *Bob: ${style.quip}*`,
     );
-  const shown = await deliverFinal(pub, { content: header, embeds: [embed], allowedMentions: noPings });
+  const shown = await deliverFinal(pub, { content: header, embeds: [embed], allowedMentions: noPings }, {
+    client: session.interaction.client,
+    guildId,
+    channelId: session.interaction.channelId,
+  });
 
   state.balance = balance;
   state.played = true;
-  state.notice = shown
-    ? null
-    : `⚠️ Nie udało się pokazać wyniku na kanale. Gra jest rozliczona: ${BJ_RESULT[game.outcome]} (stawka ${stake}, wypłata ${payout}, saldo ${balance})`;
+  state.notice = resultNotice(shown, `🃏 ${BJ_RESULT[game.outcome]} (stawka ${stake}, wypłata ${payout}, saldo ${balance})`);
 }
 
 async function bjStart(click, session) {
@@ -693,7 +738,7 @@ async function handlePlay(click, session) {
     } else {
       state.balance = result.balance;
       state.played = true;
-      state.notice = result.shown ? null : `⚠️ Nie udało się pokazać wyniku na kanale (brak uprawnień albo Discord jest przeciążony). Gra jest rozliczona, wynik:\n${result.summary}`;
+      state.notice = resultNotice(result.shown, result.summary);
     }
   } finally {
     casino.finishGame(guildId, user.id);

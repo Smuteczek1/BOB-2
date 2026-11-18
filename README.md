@@ -89,6 +89,7 @@ npm start
 | `/rola-panel usun-panel` | Usuwa cały panel razem z wiadomością | Zarządzanie rolami |
 | `/rola-panel lista` | Pokazuje wszystkie panele ról na serwerze (z ID) | Zarządzanie rolami |
 | `/setup-poziomy [kategoria] [nazwa_kanalu]` | Tworzy kanał ogłaszający kamienie milowe poziomów | Zarządzanie serwerem |
+| `/setup-kasyno [kanal] [kategoria] [nazwa_kanalu] [wylacz]` | Ustawia kanał wyników kasyna: po każdej grze wiadomość z gry znika, a wynik trafia na ten kanał (istniejący albo nowy). `wylacz:True` przywraca stare zachowanie | Zarządzanie serwerem |
 | `/poziom [uzytkownik]` | Pokazuje Twój (lub czyjś) aktualny poziom i XP | Wszyscy |
 | `/eksport-poziomow` | Wysyła plik CSV z XP i poziomami wszystkich (kopia zapasowa) | Administrator |
 | `/reset co:[monety/exp/ekwipunek/wszystko] [osoba]` | Zeruje monety i/lub EXP jednej osoby albo całego serwera (z podglądem, potwierdzeniem i kopią usuniętych danych) | Administrator |
