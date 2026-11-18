@@ -96,9 +96,13 @@ function spinRoulette(kind, chosenNumber) {
 //  Zwraca nowe saldo albo null, gdy saldo nie wystarcza na stawkę.
 //  W dzienniku zapisywany jest wynik netto (wygrana minus stawka).
 // ------------------------------------------------------------
-async function settleBetEx(guildId, userId, bet, payout, reason) {
+//  held (opcjonalnie): część stawki pobrana WCZEŚNIEJ przez holdStake (gry wieloetapowe, np. blackjack).
+//  Wtedy z salda schodzi już tylko reszta (bet - held), a wpis w dzienniku dopełnia wcześniejszy wpis z holdStake.
+async function settleBetEx(guildId, userId, bet, payout, reason, held = 0) {
   if (!Number.isSafeInteger(bet) || bet <= 0) throw new Error('settleBet: stawka musi być dodatnią liczbą całkowitą');
   if (!Number.isSafeInteger(payout) || payout < 0) throw new Error('settleBet: wypłata musi być liczbą całkowitą >= 0');
+  if (!Number.isSafeInteger(held) || held < 0 || held > bet) throw new Error('settleBet: held musi być liczbą całkowitą od 0 do stawki');
+  const due = bet - held; // tyle jeszcze trzeba pobrać z salda
 
   const db = require('../db'); // wczytywane tutaj, żeby logikę gier dało się testować bez bazy
   const client = await db.raw.connect();
@@ -109,7 +113,7 @@ async function settleBetEx(guildId, userId, bet, payout, reason) {
       SET balance = balance - $3::bigint + $4::bigint
       WHERE guild_id = $1 AND user_id = $2 AND balance >= $3::bigint
       RETURNING balance
-    `, [guildId, userId, bet, payout]);
+    `, [guildId, userId, due, payout]);
 
     if (res.rowCount === 0) {
       await client.query('ROLLBACK');
@@ -147,10 +151,42 @@ async function settleBetEx(guildId, userId, bet, payout, reason) {
     await client.query(`
       INSERT INTO economy_transactions (guild_id, user_id, amount, balance_after, reason, created_at)
       VALUES ($1, $2, $3::bigint, $4::bigint, $5, $6::bigint)
-    `, [guildId, userId, payout - bet + refund, balance, reason, Date.now()]);
+    `, [guildId, userId, payout - due + refund, balance, reason, Date.now()]);
 
     await client.query('COMMIT');
     return { balance, payout: payout + refund, insurance };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => null);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Pobiera stawkę z góry (np. na początku rozdania blackjacka), żeby gracz nie mógł jej wydać w trakcie gry.
+// Zwraca nowe saldo albo null, gdy brakuje środków. Rozliczenie na końcu: settleBetEx(..., held).
+async function holdStake(guildId, userId, amount, reason) {
+  if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error('holdStake: kwota musi być dodatnią liczbą całkowitą');
+  const db = require('../db');
+  const client = await db.raw.connect();
+  try {
+    await client.query('BEGIN');
+    const res = await client.query(`
+      UPDATE economy_accounts SET balance = balance - $3::bigint
+      WHERE guild_id = $1 AND user_id = $2 AND balance >= $3::bigint
+      RETURNING balance
+    `, [guildId, userId, amount]);
+    if (res.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    const balance = Number(res.rows[0].balance);
+    await client.query(`
+      INSERT INTO economy_transactions (guild_id, user_id, amount, balance_after, reason, created_at)
+      VALUES ($1, $2, $3::bigint, $4::bigint, $5, $6::bigint)
+    `, [guildId, userId, -amount, balance, reason, Date.now()]);
+    await client.query('COMMIT');
+    return balance;
   } catch (err) {
     await client.query('ROLLBACK').catch(() => null);
     throw err;
@@ -227,6 +263,7 @@ module.exports = {
   rouletteColor,
   settleBet,
   settleBetEx,
+  holdStake,
   tryStartGame,
   finishGame,
   slotRtp,
