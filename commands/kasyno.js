@@ -13,6 +13,7 @@ const {
 const db = require('../db');
 const { formatCoins, CURRENCY } = require('../utils/economy');
 const casino = require('../utils/casino');
+const bj = require('../utils/blackjack');
 
 // ============================================================
 //  /kasyno: PRYWATNE menu (widzisz je tylko Ty), ale każda rozegrana gra
@@ -31,6 +32,7 @@ const GAMES = {
   automat: { label: 'Automat', emoji: '🎰', blurb: '3 bębny, wygrane do x250. Dwie wiśnie lub cytryny też coś zwracają.' },
   ruletka: { label: 'Ruletka', emoji: '🎡', blurb: 'Ruletka europejska (0-36). Kolor, parzystość lub połowa płacą x2, numer x36.' },
   moneta: { label: 'Orzeł/reszka', emoji: '🪙', blurb: 'Podwajasz stawkę albo ją tracisz. Szansa 48%.' },
+  blackjack: { label: 'Blackjack', emoji: '🃏', blurb: 'Zbierz bliżej 21 niż krupier, ale nie więcej. Dobierasz, pasujesz albo podwajasz. Blackjack płaci 3:2.' },
 };
 const SIDE_LABELS = { orzel: '🦅 Orzeł', reszka: '🪙 Reszka' };
 
@@ -55,6 +57,45 @@ const BOB_LOSE = [
 const BOB_PUSH = ['Ani w tę, ani w tamtą stronę. Bywa.', 'Odzyskałeś część. To się liczy jako zwycięstwo, jeśli nie masz ambicji.'];
 
 const fmtPct = (x) => `${(x * 100).toFixed(1)}%`;
+// Zwrot przy poprawnej strategii podstawowej, policzony symulacją (utils/blackjack.js: simulateRtp). Zmieniłeś zasady? Przelicz i popraw.
+const BJ_RTP_TEXT = '99%';
+
+// ---------------- BLACKJACK: WIDOK ----------------
+
+const fmtCards = (cards) => cards.map((c) => `\`${c.rank}${c.suit}\``).join(' ');
+const fmtTotal = (cards) => {
+  const { total, soft } = bj.handValue(cards);
+  return `${total}${soft && total <= 21 ? ' (miękkie)' : ''}`;
+};
+
+const BJ_RESULT = {
+  blackjack: '🃏 BLACKJACK!',
+  win: '✅ Wygrana!',
+  push: '🤝 Remis',
+  lose: '❌ Przegrana',
+  bust: '💥 Powyżej 21',
+  dealer_blackjack: '❌ Krupier ma blackjacka',
+};
+
+// Stół widoczny publicznie. Dopóki gra trwa, druga karta krupiera jest zakryta.
+function bjTable(game, bet, { reveal = false } = {}) {
+  const dealer = reveal ? `${fmtCards(game.dealer)} = **${fmtTotal(game.dealer)}**` : `${fmtCards([game.dealer[0]])} \`❔\``;
+  const stake = bj.stakeFor(bet, game);
+  return (
+    `**Krupier:** ${dealer}\n` +
+    `**Gracz:** ${fmtCards(game.player)} = **${fmtTotal(game.player)}**\n\n` +
+    `Stawka: ${formatCoins(stake)}${game.doubled ? ' (podwojona)' : ''}`
+  );
+}
+
+function bjPlayingEmbed(game, bet) {
+  return new EmbedBuilder()
+    .setColor(0x7a5420)
+    .setTitle('🃏 Blackjack')
+    .setDescription(bjTable(game, bet))
+    .setFooter({ text: 'Gracz decyduje: dobierz, pasuj albo podwój.' });
+}
+
 
 // ---------------- WIDOK MENU ----------------
 
@@ -77,6 +118,15 @@ function rulesEmbed() {
         inline: true,
       },
       { name: `🪙 Orzeł/reszka (zwrot ${fmtPct(casino.coinRtp())})`, value: 'Szansa **48%**, wygrana **x2**.', inline: true },
+      {
+        name: `🃏 Blackjack (zwrot ok. ${BJ_RTP_TEXT})`,
+        value:
+          'Wygrana **x2**, blackjack (As + 10/figura) **x2.5**, remis zwraca stawkę.\n' +
+          `Krupier staje na 17, ${bj.DECKS} talii, tasowane co rozdanie.\n` +
+          'Podwojenie na pierwszych dwóch kartach (stawka x2, jedna karta). Bez dzielenia par.\n' +
+          'Gdy zamkniesz menu w trakcie rozdania, pasujesz automatycznie.',
+        inline: false,
+      },
     )
     .setFooter({ text: 'Graj z głową. To tylko monety, ale dom w końcu zawsze wygrywa.' });
 }
@@ -97,6 +147,35 @@ async function buildPanel(session, { disabled = false } = {}) {
   if (!disabled || state.balance === null) {
     const account = await db.getEconomyAccount(session.guildId, session.user.id);
     state.balance = account ? Number(account.balance) : 0;
+  }
+
+  // Trwa rozdanie blackjacka: pokazujemy tylko jego przyciski (nie da się zmienić gry ani stawki)
+  if (state.bj) {
+    const { game, bet } = state.bj;
+    const canDbl = bj.canDouble(game) && state.balance >= bet;
+    const embed = new EmbedBuilder()
+      .setColor(0x7a5420)
+      .setTitle('🃏 Blackjack: Twój ruch')
+      .setDescription(
+        `${state.notice ? `${state.notice}\n\n` : ''}${bjTable(game, bet)}\nSaldo: ${formatCoins(state.balance)}`,
+      )
+      .setFooter({ text: 'To menu widzisz tylko Ty. Stół jest publicznie na czacie.' });
+    return {
+      content: '',
+      embeds: [embed],
+      components: [
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('kas_bj_hit').setLabel('Dobierz').setEmoji('➕').setStyle(ButtonStyle.Primary).setDisabled(disabled),
+          new ButtonBuilder().setCustomId('kas_bj_stand').setLabel('Pasuję').setEmoji('✋').setStyle(ButtonStyle.Success).setDisabled(disabled),
+          new ButtonBuilder()
+            .setCustomId('kas_bj_double')
+            .setLabel('Podwój')
+            .setEmoji('✖️')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(disabled || !canDbl),
+        ),
+      ],
+    };
   }
 
   let embed;
@@ -393,6 +472,165 @@ async function playCoin(click, guildId, user, bet, side) {
   return { balance, shown, summary: `🪙 ${SIDE_LABELS[flip.result]}: ${style.head} (stawka ${bet}, wypłata ${payout}, saldo ${balance})` };
 }
 
+// ---------------- BLACKJACK: ROZGRYWKA ----------------
+// Stawka jest pobierana z góry (holdStake), więc w trakcie rozdania nie da się jej wydać gdzie indziej.
+// Rozdanie żyje w session.state.bj = { game, bet, held, pub, header } i kończy się w bjFinish.
+
+// Kończy rozdanie: rozlicza pieniądze (jedna transakcja), pokazuje wynik publicznie, zwalnia blokadę gry.
+async function bjFinish(session) {
+  const { state, guildId, user } = session;
+  const { game, bet, held, pub, header } = state.bj;
+  const stake = bj.stakeFor(bet, game);
+  const basePayout = bj.payoutFor(bet, game);
+
+  let settled;
+  try {
+    settled = await casino.settleBetEx(guildId, user.id, stake, basePayout, game.doubled ? 'casino_blackjack_x2' : 'casino_blackjack', held);
+  } finally {
+    state.bj = null;
+    casino.finishGame(guildId, user.id);
+  }
+  if (settled === null) throw new Error('bjFinish: rozliczenie zwróciło null mimo pobranej stawki');
+  const { balance, payout, insurance } = settled;
+
+  const style = outcomeStyle(stake, payout);
+  const embed = new EmbedBuilder()
+    .setColor(style.color)
+    .setTitle(`🃏 ${BJ_RESULT[game.outcome]}`)
+    .setDescription(
+      `**Krupier:** ${fmtCards(game.dealer)} = **${fmtTotal(game.dealer)}**\n` +
+      `**Gracz:** ${fmtCards(game.player)} = **${fmtTotal(game.player)}**\n\n` +
+      `${resultLines(stake, payout, balance, insurance)}\n\n🥃 *Bob: ${style.quip}*`,
+    );
+  const shown = await deliverFinal(pub, { content: header, embeds: [embed], allowedMentions: noPings });
+
+  state.balance = balance;
+  state.played = true;
+  state.notice = shown
+    ? null
+    : `⚠️ Nie udało się pokazać wyniku na kanale. Gra jest rozliczona: ${BJ_RESULT[game.outcome]} (stawka ${stake}, wypłata ${payout}, saldo ${balance})`;
+}
+
+async function bjStart(click, session) {
+  const { state, guildId, user } = session;
+
+  const start = casino.tryStartGame(guildId, user.id);
+  if (!start.ok) {
+    await click.reply({ content: start.message, flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  state.busy = true;
+  try {
+    await click.deferUpdate();
+    await bjDeal(click, session);
+  } catch (err) {
+    console.error('Kasyno: błąd startu blackjacka:', err);
+    state.notice = '❌ Coś poszło nie tak przy rozdaniu. Spróbuj ponownie.';
+  } finally {
+    state.busy = false;
+    if (!state.bj) casino.finishGame(guildId, user.id); // blokada zostaje tylko na czas trwającego rozdania
+  }
+
+  await click.editReply(await buildPanel(session)).catch((err) => console.error('Kasyno: nie odświeżono menu:', err.message));
+}
+
+// Pobiera stawkę, rozdaje karty i publikuje stół. Ustawia state.bj, jeśli rozdanie trwa dalej.
+async function bjDeal(click, session) {
+  const { state, guildId, user } = session;
+  const bet = state.bet;
+
+  const balance = await casino.holdStake(guildId, user.id, bet, 'casino_blackjack_stawka');
+  if (balance === null) {
+    state.balance = null;
+    state.notice = `💸 Nie stać Cię na stawkę ${formatCoins(bet)}. Zmień stawkę albo odbierz \`/nagroda\`.`;
+    return;
+  }
+
+  try {
+    const game = bj.startHand();
+    const header = `${user} gra w blackjacka!`;
+    const pub = await openPublic(click, { content: header, embeds: [bjPlayingEmbed(game, bet)], allowedMentions: noPings });
+    state.bj = { game, bet, held: bet, pub, header };
+    state.notice = null;
+
+    if (game.outcome !== null) {
+      // Blackjack albo blackjack krupiera na starcie: od razu rozliczamy
+      if (pub) await sleep(900);
+      await bjFinish(session);
+    }
+  } catch (err) {
+    if (state.bj) {
+      // Stawka pobrana, a coś się wysypało: kończymy rozdanie pasując, żeby gracz dostał rozliczenie
+      console.error('Kasyno: błąd w trakcie rozdania, pasuję za gracza:', err);
+      await bjAutoStand(session);
+    } else {
+      // Nie doszło do rozdania: oddajemy stawkę
+      await casino.settleBetEx(guildId, user.id, bet, bet, 'casino_blackjack_zwrot', bet);
+      throw err;
+    }
+  }
+}
+
+// action: 'hit' | 'stand' | 'double'
+async function bjAction(click, session, action) {
+  const { state } = session;
+  if (!state.bj) return click.deferUpdate().catch(() => null);
+
+  state.busy = true;
+  try {
+    await click.deferUpdate();
+    await bjStep(session, action);
+  } catch (err) {
+    console.error('Kasyno: błąd w trakcie blackjacka:', err);
+    state.notice = '❌ Coś poszło nie tak. Spróbuj jeszcze raz.';
+  } finally {
+    state.busy = false;
+  }
+
+  await click.editReply(await buildPanel(session)).catch((err) => console.error('Kasyno: nie odświeżono menu:', err.message));
+}
+
+async function bjStep(session, action) {
+  const { state, guildId, user } = session;
+  const hand = state.bj;
+  const { game, bet } = hand;
+
+  if (action === 'double') {
+    if (!bj.canDouble(game)) {
+      state.notice = '⚠️ Podwoić można tylko na pierwszych dwóch kartach.';
+      return;
+    }
+    const extra = await casino.holdStake(guildId, user.id, bet, 'casino_blackjack_podwojenie');
+    if (extra === null) {
+      state.balance = null;
+      state.notice = `💸 Nie stać Cię na podwojenie (potrzeba jeszcze ${formatCoins(bet)}).`;
+      return;
+    }
+    hand.held += bet;
+    bj.double(game);
+  } else if (action === 'hit') {
+    bj.hit(game);
+  } else {
+    bj.stand(game);
+  }
+  state.notice = null;
+
+  if (game.outcome !== null) await bjFinish(session);
+  else await animate(hand.pub, { content: hand.header, embeds: [bjPlayingEmbed(game, bet)], allowedMentions: noPings });
+}
+
+// Menu wygasło albo się zamknęło w trakcie rozdania: pasujemy za gracza, żeby nie przepadła stawka
+async function bjAutoStand(session) {
+  if (!session.state.bj) return;
+  try {
+    if (session.state.bj.game.outcome === null) bj.stand(session.state.bj.game);
+    await bjFinish(session);
+  } catch (err) {
+    console.error('Kasyno: nie udało się dokończyć rozdania blackjacka:', err);
+  }
+}
+
 // ---------------- OBSŁUGA KLIKNIĘĆ ----------------
 
 // Pytanie o liczbę w okienku (modal): stawka albo numer ruletki.
@@ -480,6 +718,15 @@ async function onClick(click, session) {
     await click.update(await buildPanel(session));
   };
 
+  // W trakcie rozdania blackjacka działają tylko jego przyciski
+  if (state.bj) {
+    if (id === 'kas_bj_hit') return bjAction(click, session, 'hit');
+    if (id === 'kas_bj_stand') return bjAction(click, session, 'stand');
+    if (id === 'kas_bj_double') return bjAction(click, session, 'double');
+    await click.deferUpdate().catch(() => null);
+    return;
+  }
+
   if (id.startsWith('kas_game_')) {
     const game = id.slice('kas_game_'.length);
     if (!GAMES[game]) return;
@@ -536,6 +783,7 @@ async function onClick(click, session) {
   }
   if (id === 'kas_play') {
     if (state.view !== 'game' || !state.game) return refresh();
+    if (state.game === 'blackjack') return bjStart(click, session);
     return handlePlay(click, session);
   }
   if (id === 'kas_close') {
@@ -560,6 +808,7 @@ function newSession(interaction) {
       rouletteNumber: 17,
       coinSide: 'orzel',
       played: false,
+      bj: null, // trwające rozdanie blackjacka
       busy: false,
       balance: null,
       notice: null,
@@ -570,7 +819,7 @@ function newSession(interaction) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('kasyno')
-    .setDescription('Kasyno Boba: automat, ruletka i orzeł/reszka. Menu jest prywatne, a gra publiczna.')
+    .setDescription('Kasyno Boba: automat, ruletka, orzeł/reszka i blackjack. Menu jest prywatne, a gra publiczna.')
     .setDMPermission(false),
 
   async execute(interaction) {
@@ -600,6 +849,7 @@ module.exports = {
     });
 
     collector.on('end', async (_collected, reason) => {
+      await bjAutoStand(session); // niedokończone rozdanie blackjacka kończy się pasowaniem
       if (reason === 'closed') return;
       await interaction
         .editReply({ content: '⌛ Menu kasyna wygasło. Wpisz `/kasyno`, żeby otworzyć je ponownie.', embeds: [], components: [] })
@@ -608,5 +858,5 @@ module.exports = {
   },
 
   // Eksport do testów
-  _test: { buildPanel, onClick, newSession, GAMES },
+  _test: { buildPanel, onClick, newSession, GAMES, bjAutoStand },
 };
