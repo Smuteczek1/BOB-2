@@ -56,6 +56,7 @@ function ensureSchema() {
         started_at BIGINT NOT NULL,
         closed_at BIGINT
       );
+      ALTER TABLE heist_runs ADD COLUMN IF NOT EXISTS paid TEXT;
     `)
     .catch((err) => { schemaReady = null; throw err; });
   return schemaReady;
@@ -254,7 +255,29 @@ async function disband(guildId, leaderId, gangId) {
 // Start: sprawdza poziomy, areszt, limity dzienne i skład ekipy, zabiera przedmioty (liderowi/startującemu) i zlicza napad
 // każdemu uczestnikowi, wszystko w jednej transakcji. Zwraca { ok: true, runId } albo { ok: false, reason, ... }:
 //   unknown | players (zła liczba osób) | not_member (+userId) | level (+userId, need) | jail (+userId, until) | cap (+userId) | items (+missing: {id: brakuje})
-async function startRun({ guildId, heistId, leaderId, playerIds, gangId = null, now = Date.now() }) {
+//
+// SKŁADKA NA SPRZĘT: pledges = { [userId]: { [itemId]: ile } } to deklaracje członków ekipy (nic nie zabiera się wcześniej).
+// Przy starcie sprzęt zbiera się najpierw od wnoszących (w kolejności ekipy, nie więcej niż trzeba i niż faktycznie mają),
+// a braki pokrywa lider z własnego ekwipunku. Kto ile sztuk dał, zapisuje się w heist_runs.paid (udział w bonusie za sprzęt).
+class GearGone extends Error {
+  constructor(reason, userId, missing) {
+    super('gear gone');
+    this.reason = reason;
+    this.userId = userId;
+    this.missing = missing;
+  }
+}
+
+async function startRun(args) {
+  try {
+    return await startRunTx(args);
+  } catch (err) {
+    if (err instanceof GearGone) return { ok: false, reason: err.reason, userId: err.userId, missing: err.missing };
+    throw err;
+  }
+}
+
+async function startRunTx({ guildId, heistId, leaderId, playerIds, gangId = null, pledges = {}, now = Date.now() }) {
   await ensureSchema();
   const heist = H.HEISTS[heistId];
   if (!heist) return { ok: false, reason: 'unknown' };
@@ -278,21 +301,44 @@ async function startRun({ guildId, heistId, leaderId, playerIds, gangId = null, 
       if (Number(row.jail_until) > now) return { ok: false, reason: 'jail', userId: u, until: Number(row.jail_until) };
       if (row.heists_today >= H.DAILY_LIMIT) return { ok: false, reason: 'cap', userId: u };
     }
-    // przedmioty: najpierw sprawdzamy wszystko, potem zabieramy (brak = nic nie przepada)
-    const have = await c.query('SELECT item_id, quantity FROM inventory WHERE guild_id = $1 AND user_id = $2 AND item_id = ANY($3::text[])', [guildId, leaderId, Object.keys(heist.items)]);
-    const owned = Object.fromEntries(have.rows.map((r) => [r.item_id, Number(r.quantity)]));
+    // przedmioty: najpierw ustalamy, od kogo ile (wnoszący, potem lider), sprawdzamy wszystko, dopiero potem zabieramy (brak = nic nie przepada)
+    const have = await c.query(
+      'SELECT user_id, item_id, quantity FROM inventory WHERE guild_id = $1 AND user_id = ANY($2::text[]) AND item_id = ANY($3::text[])',
+      [guildId, players, Object.keys(heist.items)],
+    );
+    const owned = {}; // owned[userId][itemId]
+    for (const r of have.rows) (owned[r.user_id] ??= {})[r.item_id] = Number(r.quantity);
+
+    const left = { ...heist.items }; // ile jeszcze brakuje do kompletu
+    const take = []; // [userId, itemId, ile]
+    const paid = {}; // userId -> ile sztuk sprzętu wniósł
+    const grab = (u, id, want) => {
+      const n = Math.min(want, left[id] ?? 0, owned[u]?.[id] ?? 0);
+      if (n <= 0) return;
+      take.push([u, id, n]);
+      owned[u][id] -= n;
+      left[id] -= n;
+      paid[u] = (paid[u] ?? 0) + n;
+    };
+    for (const u of players) {
+      if (u === leaderId) continue;
+      for (const [id, want] of Object.entries(pledges?.[u] ?? {})) if (Number.isInteger(want) && want > 0 && heist.items[id]) grab(u, id, want);
+    }
+    for (const id of Object.keys(left)) grab(leaderId, id, left[id]); // braki pokrywa lider
     const missing = {};
-    for (const [id, n] of Object.entries(heist.items)) if ((owned[id] ?? 0) < n) missing[id] = n - (owned[id] ?? 0);
+    for (const [id, n] of Object.entries(left)) if (n > 0) missing[id] = n;
     if (Object.keys(missing).length) return { ok: false, reason: 'items', missing };
-    for (const [id, n] of Object.entries(heist.items)) {
-      if (!(await inv.removeItem(c, guildId, leaderId, id, n))) return { ok: false, reason: 'items', missing: { [id]: n } };
+    for (const [u, id, n] of take) {
+      // withTransaction zatwierdza także zwrócone { ok: false }, więc przy braku przedmiotu RZUCAMY wyjątek: transakcja się cofa
+      // i nic nie przepada (ktoś mógł w międzyczasie sprzedać przedmiot na rynku)
+      if (!(await inv.removeItem(c, guildId, u, id, n))) throw new GearGone(u === leaderId ? 'items' : 'pledge_gone', u, { [id]: n });
     }
     await c.query('UPDATE heist_profiles SET heists_today = heists_today + 1 WHERE guild_id = $1 AND user_id = ANY($2::text[])', [guildId, players]);
     const run = await c.query(
-      'INSERT INTO heist_runs (guild_id, heist_id, gang_id, leader_id, players, started_at) VALUES ($1, $2, $3, $4, $5, $6::bigint) RETURNING id',
-      [guildId, heistId, gangId, leaderId, JSON.stringify(players), now],
+      'INSERT INTO heist_runs (guild_id, heist_id, gang_id, leader_id, players, started_at, paid) VALUES ($1, $2, $3, $4, $5, $6::bigint, $7) RETURNING id',
+      [guildId, heistId, gangId, leaderId, JSON.stringify(players), now, JSON.stringify(paid)],
     );
-    return { ok: true, runId: Number(run.rows[0].id), players };
+    return { ok: true, runId: Number(run.rows[0].id), players, paid };
   });
 }
 
@@ -307,13 +353,16 @@ async function settleRun({ guildId, runId, results, now = Date.now() }) {
     if (!run) return { ok: false, reason: 'gone' };
     const heist = H.HEISTS[run.heist_id];
     const players = JSON.parse(run.players);
+    const totalGear = H.gearCount(heist);
+    // Udział w sprzęcie (bonus za sprzęt w dużych skokach). Stare napady bez zapisu: cały sprzęt płacił lider.
+    const paid = run.paid ? JSON.parse(run.paid) : { [run.leader_id]: totalGear };
     const success = players.every((u) => results[u]?.stagesPassed);
     const out = {};
     for (const u of [...players].sort()) {
       const r = results[u] ?? { hits: 0, rounds: 1, stagesPassed: false };
       const entry = { passed: Boolean(r.stagesPassed), loot: 0, fine: 0, jailUntil: 0, balance: null, xp: 0, level: null, oldLevel: null };
       if (success) {
-        entry.loot = H.lootFor(heist, r.rounds ? r.hits / r.rounds : 0, players.length, String(u) === String(run.leader_id));
+        entry.loot = H.lootFor(heist, r.rounds ? r.hits / r.rounds : 0, players.length, totalGear > 0 ? (paid[u] ?? 0) / totalGear : 0);
         entry.balance = await db.applyCredit(c, guildId, u, entry.loot, `crime_${heist.id}`, true);
       } else if (!r.stagesPassed) {
         const acc = await c.query('SELECT balance FROM economy_accounts WHERE guild_id = $1 AND user_id = $2 FOR UPDATE', [guildId, u]);
@@ -347,6 +396,15 @@ async function settleRun({ guildId, runId, results, now = Date.now() }) {
   });
 }
 
+// Ile sztuk wskazanych przedmiotów ma gracz: { [itemId]: ilość }. Do okna składki na sprzęt.
+async function getOwned(guildId, userId, itemIds) {
+  const res = await db.raw.query(
+    'SELECT item_id, quantity FROM inventory WHERE guild_id = $1 AND user_id = $2 AND item_id = ANY($3::text[])',
+    [guildId, userId, itemIds],
+  );
+  return Object.fromEntries(res.rows.map((r) => [r.item_id, Number(r.quantity)]));
+}
+
 // Napady porzucone w trakcie (restart bota itp.) zamykamy jako 'abandoned' (przedmioty przepadły)
 async function sweepStale(now = Date.now()) {
   await ensureSchema();
@@ -356,5 +414,5 @@ async function sweepStale(now = Date.now()) {
 module.exports = {
   ensureSchema, dayKey, getProfile, jailUntil, validName, cleanName,
   getMyGangs, createGang, invite, getInvites, acceptInvite, declineInvite, leave, kick, disband,
-  startRun, settleRun, sweepStale,
+  startRun, settleRun, sweepStale, getOwned,
 };

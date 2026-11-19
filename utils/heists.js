@@ -102,13 +102,16 @@ function assignStages(heist, playerCount) {
 }
 
 // Łup gracza: od dolnej do górnej granicy zależnie od skuteczności (poprawne rundy / wszystkie),
-// z bonusem za większą ekipę (małe napady) albo za bycie liderem (duże skoki: lider płaci sprzętem)
-function lootFor(heist, performance, crewSize = 1, isLeader = false) {
+// z bonusem za większą ekipę (małe napady) albo za sprzęt (duże skoki).
+// gearShare: jaką część sprzętu napadu wniósł gracz (0-1). Bonus LEADER_BONUS dzieli się proporcjonalnie do wkładu,
+// więc gdy cały sprzęt dał lider, dostaje pełne +15% (jak dawniej). Dla zgodności przyjmuje też true/false (lider / nie).
+function lootFor(heist, performance, crewSize = 1, gearShare = 0) {
   const [min, max] = heist.loot;
   const p = Math.max(0, Math.min(1, performance));
+  const share = typeof gearShare === 'boolean' ? (gearShare ? 1 : 0) : Math.max(0, Math.min(1, Number(gearShare) || 0));
   const bonus = heist.size === 'small'
     ? 1 + CREW_BONUS * Math.max(0, crewSize - 1)
-    : (isLeader ? 1 + LEADER_BONUS : 1);
+    : 1 + LEADER_BONUS * share;
   return Math.round((min + (max - min) * p) * bonus);
 }
 
@@ -126,10 +129,13 @@ function fineFor(heist, balance) {
   return Math.max(0, Math.min(balance, raw));
 }
 
+// Ile sztuk sprzętu łącznie wymaga napad
+const gearCount = (heist) => Object.values(heist.items).reduce((a, n) => a + n, 0);
+
 const itemsText = (items, names) => Object.entries(items).map(([id, n]) => `${names[id] ?? id} ×${n}`).join(', ');
 
 module.exports = {
   DAILY_LIMIT, MAX_GANG_MEMBERS, MAX_GANGS_PER_USER, CREW_BONUS, LEADER_BONUS, GEAR_LOOT, BIG_LOOT_MULT, LOBBY_MS, ACTION_MS,
-  STAGE_TYPES, HEISTS, HEIST_LIST, stagePassed, assignStages, lootFor, fineFor, itemsText,
+  STAGE_TYPES, HEISTS, HEIST_LIST, stagePassed, assignStages, lootFor, fineFor, itemsText, gearCount,
   XP_PER_ROUND, XP_PER_ROUND_BIG, XP_PARTIAL, crimeXpToReach, crimeLevelForXp, crimeProgress, xpFor,
 };

@@ -51,6 +51,7 @@ function errorText(r, heist) {
     case 'jail': return `🚔 ${r.userId ? `<@${r.userId}> jest` : 'Jesteś'} w areszcie do <t:${ts(r.until)}:t> (<t:${ts(r.until)}:R>).`;
     case 'cap': return `⛔ ${r.userId ? `<@${r.userId}> wykonał` : 'Wykonałeś'} już dzisiaj maksymalną liczbę napadów (${H.DAILY_LIMIT}).`;
     case 'items': return `🎒 Brakuje sprzętu: ${missingText(r.missing)}. Zdobędziesz go ze skrzyń albo na \`/rynek\`.`;
+    case 'pledge_gone': return `🎒 <@${r.userId}> nie ma już zadeklarowanego sprzętu (${missingText(r.missing)}), pewnie go sprzedał(a) albo zużył(a). Niech wniesie sprzęt ponownie, a start powtórz.`;
     case 'players': return `👥 Ten napad wymaga ekipy z bandy: ${heist.min}-${heist.max} osób.`;
     case 'not_member': return `🚫 <@${r.userId}> nie jest w tej bandzie.`;
     case 'gone': return '⌛ Ten napad już się zakończył.';
@@ -372,6 +373,108 @@ let lastLobby = null; // tylko do testów
 const busyGangs = new Set(); // banda ma naraz jedną zbiórkę/akcję
 const busyUsers = new Set(); // gracz bierze udział naraz w jednej akcji
 
+// ---------------- SKŁADKA NA SPRZĘT ----------------
+// lobby.pledges = { [userId]: { [itemId]: ile } }: deklaracje członków (nic nie jest zabierane przed startem).
+// Przy starcie zbiera się sprzęt od wnoszących, a braki pokrywa lider (utils/crime.js: startRun).
+const crewPledges = (lobby) => Object.entries(lobby.pledges).filter(([u]) => u !== lobby.leaderId && lobby.players.includes(u));
+const pooledOf = (lobby, id) => Math.min(lobby.heist.items[id], crewPledges(lobby).reduce((a, [, p]) => a + (p[id] ?? 0), 0));
+const shortfallOf = (lobby) => Object.fromEntries(Object.entries(lobby.heist.items).map(([id, n]) => [id, n - pooledOf(lobby, id)]).filter(([, n]) => n > 0));
+
+function gearText(lobby) {
+  const h = lobby.heist;
+  const lines = Object.entries(h.items).map(([id, need]) => {
+    const got = pooledOf(lobby, id);
+    return `${got >= need ? '✅' : '▫️'} ${itemName(id)}: **${got}/${need}** od ekipy`;
+  });
+  const short = shortfallOf(lobby);
+  const givers = crewPledges(lobby)
+    .map(([u, p]) => [u, Object.entries(p).filter(([id, n]) => n > 0 && h.items[id]).map(([id, n]) => `${itemName(id)} ×${n}`)])
+    .filter(([, parts]) => parts.length)
+    .map(([u, parts]) => `<@${u}> (${parts.join(', ')})`);
+  return (
+    `### 🎒 Sprzęt ekipy\n${lines.join('\n')}\n` +
+    `-# Członkowie wnoszą swój sprzęt przyciskiem **Sprzęt**, a braki pokrywa lider <@${lobby.leaderId}> z własnego ekwipunku` +
+    `${Object.keys(short).length ? `: teraz ${missingText(short)}` : ': teraz nic, ekipa ma komplet'}.` +
+    `${givers.length ? `\n-# Wnoszą: ${givers.join(' · ')}` : ''}`
+  );
+}
+
+// Prywatne okno: członek wybiera, ile sztuk którego przedmiotu wnosi do wspólnej puli
+async function openGearMenu(click, lobby, uid, onChange) {
+  const h = lobby.heist;
+  const ids = Object.keys(h.items);
+  const isLeader = uid === lobby.leaderId;
+  let owned = await crime.getOwned(lobby.guildId, uid, ids);
+  // deklaracja może zniknąć, gdy gracz wyjdzie z ekipy (okno bywa wtedy jeszcze otwarte), więc zawsze odtwarzamy ją na żądanie
+  const mine = () => (lobby.pledges[uid] ??= {});
+
+  const build = (note, off = false) => {
+    const box = new ContainerBuilder().setAccentColor(0xc0392b);
+    if (note) box.addTextDisplayComponents(text(note)), box.addSeparatorComponents(sep());
+    const lines = ids.map((id) => {
+      const need = h.items[id];
+      return `${itemName(id)}: potrzeba **${need}** · ekipa wnosi **${pooledOf(lobby, id)}** · masz **${owned[id] ?? 0}**${isLeader ? '' : ` · Ty wnosisz **${mine()[id] ?? 0}**`}`;
+    });
+    box.addTextDisplayComponents(text(`## 🎒 Sprzęt na ${h.emoji} ${h.name}\n${lines.join('\n')}`));
+    const short = shortfallOf(lobby);
+    box.addSeparatorComponents(sep());
+    if (isLeader) {
+      const lack = Object.fromEntries(Object.entries(short).filter(([id, n]) => (owned[id] ?? 0) < n).map(([id, n]) => [id, n - (owned[id] ?? 0)]));
+      box.addTextDisplayComponents(text(
+        Object.keys(short).length
+          ? `-# Braki (${missingText(short)}) pokryjesz Ty z własnego ekwipunku przy starcie.${Object.keys(lack).length ? ` **Nie masz tyle: brakuje jeszcze ${missingText(lack)}.**` : ' Masz wszystko, co trzeba.'}`
+          : '-# Ekipa ma komplet sprzętu. Z Twojego ekwipunku nic nie zejdzie.',
+      ));
+    } else {
+      box.addTextDisplayComponents(text('-# Sprzęt zabierze się dopiero przy starcie, więc do tego czasu możesz go wycofać. Za wniesioną część dostaniesz proporcjonalny udział w bonusie za sprzęt.'));
+      box.addActionRowComponents(
+        new ActionRowBuilder().addComponents(
+          ...ids.map((id) => btn(`gp_add_${id}`, `+1 ${items.ITEMS[id]?.name ?? id}`.slice(0, 80), ButtonStyle.Success, {
+            emoji: items.ITEMS[id]?.emoji,
+            disabled: off || (mine()[id] ?? 0) >= (owned[id] ?? 0) || pooledOf(lobby, id) >= h.items[id],
+          })),
+        ),
+      );
+      box.addActionRowComponents(new ActionRowBuilder().addComponents(btn('gp_reset', 'Wycofaj mój sprzęt', ButtonStyle.Secondary, { emoji: '↩️', disabled: off || !Object.values(mine()).some((n) => n > 0) })));
+    }
+    return { components: [box], flags: V2 };
+  };
+
+  await click.reply({ ...build(null), flags: V2 | MessageFlags.Ephemeral });
+  const reply = await click.fetchReply();
+  const pc = reply.createMessageComponentCollector({ filter: (i) => i.user.id === uid, idle: 5 * 60_000, time: H.LOBBY_MS });
+  pc.on('collect', async (i) => {
+    try {
+      await i.deferUpdate();
+      if (lobby.phase !== 'lobby') return pc.stop('started');
+      owned = await crime.getOwned(lobby.guildId, uid, ids); // świeży stan ekwipunku (mógł się zmienić)
+      let note = null;
+      if (i.customId === 'gp_reset') {
+        lobby.pledges[uid] = {};
+        note = '↩️ Wycofano Twój sprzęt z puli.';
+      } else if (i.customId.startsWith('gp_add_') && !isLeader) {
+        const id = i.customId.slice('gp_add_'.length);
+        if (!h.items[id]) return;
+        if (!lobby.players.includes(uid)) {
+          note = '🚪 Nie jesteś już w ekipie.';
+        } else if ((mine()[id] ?? 0) >= (owned[id] ?? 0)) {
+          note = `⚠️ Nie masz więcej: ${itemName(id)}.`;
+        } else if (pooledOf(lobby, id) >= h.items[id]) {
+          note = `✅ ${itemName(id)} jest już skompletowany(a) przez ekipę.`;
+        } else {
+          mine()[id] = (mine()[id] ?? 0) + 1;
+          note = `➕ Wnosisz: ${itemName(id)} (razem ${mine()[id]}).`;
+        }
+      }
+      await click.editReply(build(note));
+      onChange();
+    } catch (err) {
+      console.error('Napad: błąd okna sprzętu:', err);
+    }
+  });
+  pc.on('end', () => { click.editReply(build('-# To okno wygasło. Kliknij **Sprzęt** w zbiórce, żeby je otworzyć ponownie.', true)).catch(() => null); });
+}
+
 function lobbyPayload(lobby, { disabled = false, final = null } = {}) {
   const h = lobby.heist;
   const box = new ContainerBuilder().setAccentColor(final ? 0x7f8c8d : 0xc0392b);
@@ -381,9 +484,11 @@ function lobbyPayload(lobby, { disabled = false, final = null } = {}) {
     text(
       `## ${h.emoji} ${h.name}: ${lobby.phase === 'lobby' ? 'zbiórka ekipy' : 'akcja trwa'}\n` +
       `-# Banda **${lobby.gang.name}** (doświadczenie: **${(lobby.gang.xp ?? 0).toLocaleString('pl-PL')}** EXP) · lider <@${lobby.leaderId}> · ekipa: **${lobby.players.length}** (wymagane ${h.min}-${h.max})\n` +
-      `-# Sprzęt (zabiera się liderowi przy starcie): ${H.itemsText(h.items, Object.fromEntries(Object.keys(h.items).map((i) => [i, itemName(i)])))}\n-# Etapy: ${stages}\n-# Łup: ${range(h.loot)} na osobę · lider (płaci sprzętem) dostaje +${Math.round(H.LEADER_BONUS * 100)}%`,
+      `-# Etapy: ${stages}\n-# Łup: ${range(h.loot)} na osobę${h.size === 'big' ? ` · bonus za sprzęt +${Math.round(H.LEADER_BONUS * 100)}% dzielony według wniesionej części` : ''}`,
     ),
   );
+  box.addSeparatorComponents(sep());
+  box.addTextDisplayComponents(text(gearText(lobby)));
   box.addSeparatorComponents(sep());
   box.addTextDisplayComponents(text(roster));
   if (lobby.notice) box.addTextDisplayComponents(text(lobby.notice));
@@ -396,6 +501,7 @@ function lobbyPayload(lobby, { disabled = false, final = null } = {}) {
       new ActionRowBuilder().addComponents(
         btn('nl_join', 'Dołącz', ButtonStyle.Success, { emoji: '🙋', disabled }),
         btn('nl_leave', 'Wyjdź', ButtonStyle.Secondary, { emoji: '🚪', disabled }),
+        btn('nl_gear', 'Sprzęt', ButtonStyle.Primary, { emoji: '🎒', disabled }),
         btn('nl_start', `Start (${lobby.players.length}/${h.min}+)`, ButtonStyle.Danger, { emoji: '🎯', disabled: disabled || lobby.players.length < h.min }),
         btn('nl_cancel', 'Anuluj', ButtonStyle.Secondary, { emoji: '✖️', disabled }),
       ),
@@ -422,7 +528,7 @@ async function openLobby(session, heist, gang) {
 
   busyGangs.add(key);
   busyUsers.add(`${guildId}:${leaderId}`);
-  const lobby = { heist, gang, leaderId, players: [leaderId], phase: 'lobby', endsAt: Date.now() + H.LOBBY_MS, notice: null, status: {}, results: {}, entered: new Set(), starting: false, runId: null, games: {} };
+  const lobby = { heist, gang, leaderId, players: [leaderId], phase: 'lobby', endsAt: Date.now() + H.LOBBY_MS, notice: null, status: {}, results: {}, entered: new Set(), starting: false, runId: null, games: {}, pledges: {} };
   lastLobby = lobby;
   let message;
   try {
@@ -504,8 +610,13 @@ async function runLobby(session, lobby, message, key) {
           await click.deferUpdate();
           if (uid === lobby.leaderId || !lobby.players.includes(uid)) return;
           lobby.players = lobby.players.filter((u) => u !== uid);
+          delete lobby.pledges[uid]; // wychodzący zabiera swoją deklarację sprzętu
           busyUsers.delete(`${guildId}:${uid}`);
           return update();
+        }
+        if (id === 'nl_gear') {
+          if (!lobby.players.includes(uid)) return click.reply({ content: 'Najpierw dołącz do ekipy, potem możesz wnieść sprzęt.', flags: MessageFlags.Ephemeral });
+          return openGearMenu(click, lobby, uid, () => update());
         }
         if (id === 'nl_cancel' || id === 'nl_start') {
           if (uid !== lobby.leaderId) return click.reply({ content: 'Tylko lider może to zrobić.', flags: MessageFlags.Ephemeral });
@@ -516,9 +627,13 @@ async function runLobby(session, lobby, message, key) {
           }
           if (lobby.starting || lobby.players.length < lobby.heist.min) return;
           lobby.starting = true;
-          const r = await crime.startRun({ guildId, heistId: lobby.heist.id, leaderId: lobby.leaderId, playerIds: lobby.players, gangId: lobby.gang.id });
+          const r = await crime.startRun({ guildId, heistId: lobby.heist.id, leaderId: lobby.leaderId, playerIds: lobby.players, gangId: lobby.gang.id, pledges: lobby.pledges });
           if (!r.ok) {
             lobby.starting = false;
+            if (r.reason === 'pledge_gone') {
+              delete lobby.pledges[r.userId]; // jego deklaracja jest nieaktualna
+              update();
+            }
             return click.followUp({ content: errorText(r, lobby.heist), flags: MessageFlags.Ephemeral }).catch(() => null);
           }
           clearTimeout(lobbyTimer);
@@ -651,5 +766,5 @@ module.exports = {
     await openMenu(interaction);
   },
   openMenu,
-  _test: { getLobby: () => lastLobby, buildPanel, onClick, newSession, StageGame, outcomeLine },
+  _test: { getLobby: () => lastLobby, buildPanel, onClick, newSession, StageGame, outcomeLine, openLobby, lobbyPayload, openGearMenu },
 };
